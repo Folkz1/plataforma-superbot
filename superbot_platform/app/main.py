@@ -5,6 +5,7 @@ Dashboard de gerenciamento multi-tenant para bots de conversacao.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import os
 
 from app.db.database import init_db
 from app.api.routes import (
@@ -35,14 +36,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+]
+_extra = os.getenv("CORS_ORIGINS", "")
+if _extra:
+    _cors_origins.extend([u.strip() for u in _extra.split(",") if u.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
