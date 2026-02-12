@@ -1,0 +1,41 @@
+# Ignore everything by default
+*
+
+# Allow superbot_platform
+!superbot_platform/
+!superbot_platform/**
+
+# Allow root config files
+!.gitignore
+!CLAUDE.md
+
+# --- Inside superbot_platform, ignore these: ---
+
+# Python
+superbot_platform/**/venv/
+superbot_platform/**/.venv/
+superbot_platform/**/__pycache__/
+superbot_platform/**/*.py[cod]
+superbot_platform/**/*.egg-info/
+
+# Node / Next.js
+superbot_platform/**/node_modules/
+superbot_platform/**/.next/
+superbot_platform/**/out/
+superbot_platform/**/.turbo/
+
+# Environment files (secrets)
+superbot_platform/**/.env
+superbot_platform/**/.env.local
+superbot_platform/**/.env.*.local
+
+# OS
+superbot_platform/**/.DS_Store
+superbot_platform/**/Thumbs.db
+
+# Logs
+superbot_platform/**/*.log
+
+# Memory MCP
+.memory/
+.memory-mcp/
