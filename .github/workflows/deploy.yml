@@ -1,38 +1,59 @@
-name: Deploy to EasyPanel
+name: Build & Push Docker Images
 
 on:
   push:
     branches: [main]
 
-jobs:
-  deploy-backend:
-    name: Deploy Backend
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger EasyPanel deploy
-        run: |
-          curl -s -X POST "${{ secrets.EASYPANEL_URL }}/api/trpc/github.push" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: ${{ secrets.EASYPANEL_API_KEY }}" \
-            -d '{
-              "json": {
-                "projectName": "plataforma-superbot",
-                "serviceName": "backend"
-              }
-            }'
+env:
+  REGISTRY: ghcr.io
 
-  deploy-frontend:
-    name: Deploy Frontend
+jobs:
+  build-backend:
+    name: Build Backend
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Trigger EasyPanel deploy
-        run: |
-          curl -s -X POST "${{ secrets.EASYPANEL_URL }}/api/trpc/github.push" \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: ${{ secrets.EASYPANEL_API_KEY }}" \
-            -d '{
-              "json": {
-                "projectName": "frontend-superbot",
-                "serviceName": "frontend"
-              }
-            }'
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./superbot_platform
+          file: ./superbot_platform/Dockerfile.backend
+          push: true
+          tags: ${{ env.REGISTRY }}/folkz1/superbot-backend:latest
+
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./superbot_platform/dashboard
+          file: ./superbot_platform/dashboard/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/folkz1/superbot-frontend:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
