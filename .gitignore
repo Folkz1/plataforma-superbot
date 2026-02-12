@@ -9,6 +9,10 @@
 !.gitignore
 !CLAUDE.md
 
+# Allow GitHub Actions
+!.github/
+!.github/**
+
 # --- Inside superbot_platform, ignore these: ---
 
 # Python

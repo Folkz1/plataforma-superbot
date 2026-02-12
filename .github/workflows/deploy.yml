@@ -1,0 +1,38 @@
+name: Deploy to EasyPanel
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EasyPanel deploy
+        run: |
+          curl -s -X POST "${{ secrets.EASYPANEL_URL }}/api/trpc/github.push" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ secrets.EASYPANEL_API_KEY }}" \
+            -d '{
+              "json": {
+                "projectName": "plataforma-superbot",
+                "serviceName": "backend"
+              }
+            }'
+
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EasyPanel deploy
+        run: |
+          curl -s -X POST "${{ secrets.EASYPANEL_URL }}/api/trpc/github.push" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ secrets.EASYPANEL_API_KEY }}" \
+            -d '{
+              "json": {
+                "projectName": "frontend-superbot",
+                "serviceName": "frontend"
+              }
+            }'
