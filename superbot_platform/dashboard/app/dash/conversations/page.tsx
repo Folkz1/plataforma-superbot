@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { MessageSquare, Search, Clock, MessageCircle } from 'lucide-react';
+import { MessageSquare, Search, Clock, MessageCircle, HandMetal, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getPlatformLogo } from '@/components/PlatformLogos';
 
@@ -55,6 +55,21 @@ export default function ConversationsPage() {
     const matchStatus = statusFilter === 'all' || conv.status === statusFilter;
     return matchSearch && matchStatus;
   });
+
+  const handleQuickStatus = async (e: React.MouseEvent, conv: Conversation, newStatus: string) => {
+    e.stopPropagation();
+    try {
+      await api.patch(`/api/conversations/${conv.project_id}/${conv.conversation_id}/status`, {
+        status: newStatus,
+        reason: newStatus === 'handoff' ? 'Transferido para humano via lista' : 'Devolvido ao bot via lista'
+      });
+      setConversations(prev => prev.map(c =>
+        c.conversation_id === conv.conversation_id ? { ...c, status: newStatus } : c
+      ));
+    } catch (err) {
+      console.error('Erro ao mudar status:', err);
+    }
+  };
 
   const getChannelIcon = (channel: string) => {
     const logo = getPlatformLogo(channel, 20);
@@ -164,6 +179,27 @@ export default function ConversationsPage() {
                     </span>
                     <span>{conv.message_count} msgs</span>
                   </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {conv.status !== 'handoff' ? (
+                    <button
+                      onClick={(e) => handleQuickStatus(e, conv, 'handoff')}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition text-xs font-medium"
+                      title="Transferir para atendimento humano"
+                    >
+                      <HandMetal className="w-3.5 h-3.5" />
+                      Assumir
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => handleQuickStatus(e, conv, 'open')}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-xs font-medium"
+                      title="Devolver ao bot"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Devolver
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
