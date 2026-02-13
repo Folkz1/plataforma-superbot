@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { Lock, Mail, AlertCircle, Loader2, Bot } from 'lucide-react';
+import { Lock, Mail, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -57,10 +57,10 @@ export default function LoginPage() {
         
         {/* Card Content */}
         <div className="relative bg-white rounded-2xl shadow-2xl p-8">
-          {/* Logo/Icon */}
+          {/* Logo */}
           <div className="flex justify-center mb-6">
-            <div className="w-16 h-16 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
-              <Bot className="w-10 h-10 text-white" />
+            <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg p-3">
+              <img src="/logo-superbot.webp" alt="SuperBot" className="w-full h-full object-contain" />
             </div>
           </div>
 

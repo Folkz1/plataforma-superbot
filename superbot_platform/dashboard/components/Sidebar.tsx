@@ -58,13 +58,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="p-5 border-b border-gray-800">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-            <Bot className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight">SuperBot</h1>
-            <p className="text-xs text-gray-400">Platform</p>
-          </div>
+          <img src="/logo-superbot.webp" alt="SuperBot" className="h-8 w-auto opacity-90" />
         </div>
       </div>
 

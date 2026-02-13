@@ -240,7 +240,7 @@ export default function CallsPage() {
                       )}
                     </td>
                     <td className="px-5 py-3 text-sm text-gray-600 font-mono">{call.customer_phone || '-'}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{call.agent_name || call.agent_id?.slice(0, 8) || '-'}</td>
+                    <td className="px-5 py-3 text-sm text-gray-600">{call.agent_name || '-'}</td>
                     <td className="px-5 py-3 text-sm text-gray-900 font-medium">{formatDuration(call.call_duration_secs)}</td>
                     <td className="px-5 py-3">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
@@ -352,24 +352,40 @@ export default function CallsPage() {
                   )}
 
                   {/* Data Collection */}
-                  {selectedCall.data_collection && Object.keys(selectedCall.data_collection).length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2">Dados Coletados</h4>
-                      <div className="bg-gray-50 rounded-lg p-3 space-y-1">
-                        {Object.entries(selectedCall.data_collection).map(([key, value]) => {
-                          const display = value && typeof value === 'object'
-                            ? (value.value ?? JSON.stringify(value))
-                            : String(value ?? '-');
-                          return (
-                            <div key={key} className="flex items-center gap-2 text-sm">
-                              <span className="text-gray-500 font-medium">{key}:</span>
-                              <span className="text-gray-900">{display || '-'}</span>
+                  {selectedCall.data_collection && Object.keys(selectedCall.data_collection).length > 0 && (() => {
+                    // Extract only meaningful values from ElevenLabs data_collection
+                    const entries = Object.entries(selectedCall.data_collection)
+                      .map(([key, val]) => {
+                        // ElevenLabs format: { value: "...", json_schema: {...}, description: "..." }
+                        // or nested: { data_collection_id: "phone", value: "123", ... }
+                        let displayVal: string | null = null;
+                        if (val && typeof val === 'object') {
+                          displayVal = val.value != null ? String(val.value) : null;
+                        } else {
+                          displayVal = val != null ? String(val) : null;
+                        }
+                        // Use data_collection_id as label if available, otherwise key
+                        const label = (val && typeof val === 'object' && val.data_collection_id) || key;
+                        return { label, value: displayVal };
+                      })
+                      .filter(e => e.value && e.value !== 'null' && e.value !== '');
+
+                    if (entries.length === 0) return null;
+
+                    return (
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-700 mb-2">Dados Coletados</h4>
+                        <div className="bg-gray-50 rounded-lg p-3 space-y-1">
+                          {entries.map((e) => (
+                            <div key={e.label} className="flex items-center gap-2 text-sm">
+                              <span className="text-gray-500 font-medium">{e.label}:</span>
+                              <span className="text-gray-900">{e.value}</span>
                             </div>
-                          );
-                        })}
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Audio */}
                   {selectedCall.audio_url && (

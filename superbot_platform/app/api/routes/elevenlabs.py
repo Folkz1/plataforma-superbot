@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import desc, and_
 
 from app.db.database import get_db
-from app.db.models import DashboardUser, Client, VoiceCallHistory
+from app.db.models import DashboardUser, Client, VoiceCallHistory, ProjectVoiceAgent
 from app.api.routes.auth import get_current_user
 from app.core.tenancy import resolve_project_id_from_client_id
 
@@ -450,6 +450,19 @@ async def list_calls(
     today = datetime.now(timezone.utc).date()
     today_count = sum(1 for c in calls if c.start_time and c.start_time.date() == today)
 
+    # Resolve agent names from project_voice_agents
+    agent_ids = list({c.agent_id for c in calls if c.agent_id})
+    agent_names: Dict[str, str] = {}
+    if agent_ids:
+        ar = await db.execute(
+            select(ProjectVoiceAgent.agent_id, ProjectVoiceAgent.label)
+            .where(ProjectVoiceAgent.project_id == project_id)
+        )
+        agent_names = {row[0]: row[1] for row in ar.all() if row[1]}
+
+    def _agent_display(c):
+        return c.agent_name or agent_names.get(c.agent_id) or c.agent_id or "-"
+
     return {
         "stats": {
             "total": total,
@@ -462,7 +475,7 @@ async def list_calls(
             {
                 "id": str(c.id),
                 "agent_id": c.agent_id,
-                "agent_name": c.agent_name,
+                "agent_name": _agent_display(c),
                 "conversation_id": c.conversation_id,
                 "customer_name": c.customer_name,
                 "customer_phone": c.customer_phone,
@@ -502,10 +515,22 @@ async def get_call_detail(
     if not call:
         raise HTTPException(status_code=404, detail="Ligação não encontrada")
 
+    # Resolve agent name
+    resolved_name = call.agent_name
+    if not resolved_name and call.agent_id:
+        ar = await db.execute(
+            select(ProjectVoiceAgent.label)
+            .where(and_(
+                ProjectVoiceAgent.project_id == project_id,
+                ProjectVoiceAgent.agent_id == call.agent_id,
+            ))
+        )
+        resolved_name = ar.scalar_one_or_none() or call.agent_id
+
     return {
         "id": str(call.id),
         "agent_id": call.agent_id,
-        "agent_name": call.agent_name,
+        "agent_name": resolved_name or call.agent_id or "-",
         "conversation_id": call.conversation_id,
         "customer_name": call.customer_name,
         "customer_phone": call.customer_phone,
