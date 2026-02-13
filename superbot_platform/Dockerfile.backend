@@ -16,4 +16,6 @@ COPY app/ ./app/
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Behind reverse proxies (e.g. EasyPanel), we must trust X-Forwarded-* headers
+# so Starlette/FastAPI generates correct absolute URLs (https) in redirects.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
