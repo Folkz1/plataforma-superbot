@@ -29,9 +29,6 @@ export default function LoginPage() {
       localStorage.setItem('token', access_token);
       localStorage.setItem('user', JSON.stringify(user));
 
-      // Configurar axios
-      api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-
       // Redirecionar
       router.push(user?.role === 'admin' ? '/admin' : '/dash');
     } catch (err: any) {
