@@ -1,16 +1,45 @@
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Runtime API URL resolution
+// 1. Fetch from /api/config (server-side env var, works in Docker)
+// 2. Fallback to NEXT_PUBLIC_API_URL (build-time)
+// 3. Fallback to empty string (same-origin)
+let _apiUrl: string | null = null;
+let _initPromise: Promise<void> | null = null;
+
+async function resolveApiUrl(): Promise<string> {
+  if (_apiUrl !== null) return _apiUrl;
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    if (data.apiUrl) {
+      _apiUrl = data.apiUrl;
+      return _apiUrl;
+    }
+  } catch {}
+  _apiUrl = '';
+  return _apiUrl;
+}
+
+function ensureInit(): Promise<void> {
+  if (!_initPromise) {
+    _initPromise = resolveApiUrl().then((url) => {
+      api.defaults.baseURL = url;
+    });
+  }
+  return _initPromise;
+}
 
 export const api = axios.create({
-  baseURL: API_URL,
+  baseURL: '',
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Interceptor para adicionar token JWT
-api.interceptors.request.use((config) => {
+// Interceptor: resolve API URL + add JWT token before every request
+api.interceptors.request.use(async (config) => {
+  await ensureInit();
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
