@@ -4,20 +4,20 @@ import axios from 'axios';
 // 1. Fetch from /api/config (server-side env var, works in Docker)
 // 2. Fallback to NEXT_PUBLIC_API_URL (build-time)
 // 3. Fallback to empty string (same-origin)
-let _apiUrl: string | null = null;
+let _apiUrl = '';
+let _resolved = false;
 let _initPromise: Promise<void> | null = null;
 
 async function resolveApiUrl(): Promise<string> {
-  if (_apiUrl !== null) return _apiUrl;
+  if (_resolved) return _apiUrl;
   try {
     const res = await fetch('/api/config');
     const data = await res.json();
     if (data.apiUrl) {
       _apiUrl = data.apiUrl;
-      return _apiUrl;
     }
   } catch {}
-  _apiUrl = '';
+  _resolved = true;
   return _apiUrl;
 }
 
