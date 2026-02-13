@@ -356,12 +356,17 @@ export default function CallsPage() {
                     <div>
                       <h4 className="text-sm font-semibold text-gray-700 mb-2">Dados Coletados</h4>
                       <div className="bg-gray-50 rounded-lg p-3 space-y-1">
-                        {Object.entries(selectedCall.data_collection).map(([key, value]) => (
-                          <div key={key} className="flex items-center gap-2 text-sm">
-                            <span className="text-gray-500 font-medium">{key}:</span>
-                            <span className="text-gray-900">{String(value)}</span>
-                          </div>
-                        ))}
+                        {Object.entries(selectedCall.data_collection).map(([key, value]) => {
+                          const display = value && typeof value === 'object'
+                            ? (value.value ?? JSON.stringify(value))
+                            : String(value ?? '-');
+                          return (
+                            <div key={key} className="flex items-center gap-2 text-sm">
+                              <span className="text-gray-500 font-medium">{key}:</span>
+                              <span className="text-gray-900">{display || '-'}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
