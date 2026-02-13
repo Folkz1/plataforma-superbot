@@ -223,14 +223,21 @@ export default function AdminDashboard() {
   };
 
   const handleGeneratePortal = async (client: Client) => {
+    const projectId = client.settings?.project_id;
+    if (!projectId) {
+      alert('Este cliente não tem project_id configurado. Edite o cliente e preencha em Settings.');
+      return;
+    }
     try {
-      const res = await api.post('/api/live/create-portal', { client_id: client.id });
-      const url = res.data.portal_url;
-      await navigator.clipboard.writeText(url);
+      const res = await api.post('/api/live/create-portal', { project_id: projectId });
+      const token = res.data.token;
+      const portalUrl = `${window.location.origin}/live/${token}`;
+      await navigator.clipboard.writeText(portalUrl);
       setCopiedId(client.id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch (error: any) {
-      alert(error.response?.data?.detail || 'Erro ao gerar portal');
+      const detail = error.response?.data?.detail;
+      alert(typeof detail === 'string' ? detail : 'Erro ao gerar portal');
     }
   };
 

@@ -65,6 +65,18 @@ async def get_client_elevenlabs_key(client_id: str, db: AsyncSession) -> str:
     return ELEVENLABS_API_KEY
 
 
+async def get_client_agent_ids(client_id: str, db: AsyncSession) -> List[str]:
+    """Get list of ElevenLabs agent IDs configured for this client."""
+    result = await db.execute(
+        select(Client.elevenlabs_agent_id).where(Client.id == client_id)
+    )
+    agent_id = result.scalar_one_or_none()
+    if not agent_id:
+        return []
+    # Support comma-separated agent IDs
+    return [aid.strip() for aid in agent_id.split(",") if aid.strip()]
+
+
 # Helper: Check access
 def check_access(client_id: str, current_user: DashboardUser):
     if current_user.role == "admin":
@@ -83,10 +95,11 @@ async def list_agents(
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
-    """List all ElevenLabs agents for a client"""
+    """List ElevenLabs agents for a client (filtered by client's agent IDs)"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
-    
+    allowed_ids = await get_client_agent_ids(client_id, db)
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -94,7 +107,16 @@ async def list_agents(
                 headers={"xi-api-key": api_key}
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+
+            # Filter agents by client's configured agent IDs (if any)
+            if allowed_ids and isinstance(data, dict) and "agents" in data:
+                data["agents"] = [
+                    a for a in data["agents"]
+                    if a.get("agent_id") in allowed_ids
+                ]
+
+            return data
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
 
