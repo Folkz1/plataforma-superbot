@@ -1,71 +1,53 @@
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
 
-// Runtime API URL resolution
-// 1. Fetch from /api/config (server-side env var, works in Docker)
-// 2. Fallback to NEXT_PUBLIC_API_URL (build-time)
-// 3. Fallback to empty string (same-origin)
-let _apiUrl = '';
-let _resolved = false;
-let _initPromise: Promise<void> | null = null;
+// Runtime API URL - fetched once from /api/config (Next.js server route)
+let _apiUrl: string | undefined;
+let _fetchPromise: Promise<string> | null = null;
 
-async function resolveApiUrl(): Promise<string> {
-  if (_resolved) return _apiUrl;
-  try {
-    const res = await fetch('/api/config');
-    const data = await res.json();
-    if (data.apiUrl) {
-      _apiUrl = data.apiUrl;
-    }
-  } catch {}
-  _resolved = true;
-  return _apiUrl;
+function getApiUrl(): Promise<string> {
+  if (_apiUrl !== undefined) return Promise.resolve(_apiUrl);
+  if (!_fetchPromise) {
+    _fetchPromise = fetch('/api/config')
+      .then((r) => r.json())
+      .then((d) => { _apiUrl = d.apiUrl || ''; return _apiUrl; })
+      .catch(() => { _apiUrl = ''; return ''; });
+  }
+  return _fetchPromise;
 }
 
-function ensureInit(): Promise<void> {
-  if (!_initPromise) {
-    _initPromise = resolveApiUrl().then((url) => {
-      api.defaults.baseURL = url;
-    });
-  }
-  return _initPromise;
+// Create a proxy-like api object that resolves the URL before each call
+function makeRequest(method: string) {
+  return async (url: string, dataOrConfig?: any, config?: AxiosRequestConfig) => {
+    const baseUrl = await getApiUrl();
+    const fullUrl = `${baseUrl}${url}`;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+
+    // axios.get/delete signature: (url, config)
+    // axios.post/put/patch signature: (url, data, config)
+    if (method === 'get' || method === 'delete') {
+      return axios[method as 'get'](fullUrl, { headers, ...dataOrConfig });
+    }
+    return (axios as any)[method](fullUrl, dataOrConfig, { headers, ...config });
+  };
 }
 
-export const api = axios.create({
-  baseURL: '',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// Interceptor: resolve API URL + add JWT token before every request
-api.interceptors.request.use(async (config) => {
-  await ensureInit();
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Interceptor para tratar erros
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
-    }
-    return Promise.reject(error);
-  }
-);
+export const api = {
+  get: makeRequest('get'),
+  post: makeRequest('post'),
+  put: makeRequest('put'),
+  patch: makeRequest('patch'),
+  delete: makeRequest('delete'),
+};
 
 // Auth API
 export const authAPI = {
   login: (username: string, password: string) =>
     api.post('/api/auth/login', { username, password }),
-
   logout: () => api.post('/api/auth/logout'),
-
   me: () => api.get('/api/auth/me'),
 };
 
