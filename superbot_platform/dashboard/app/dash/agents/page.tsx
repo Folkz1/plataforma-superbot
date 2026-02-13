@@ -4,23 +4,26 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { 
-  Bot, Plus, Edit, Trash2, Mic, Settings, 
+  Bot, Edit, Trash2, Mic, 
   Loader2, CheckCircle, AlertCircle 
 } from 'lucide-react';
 
 interface Agent {
   agent_id: string;
-  name: string;
-  conversation_config: {
-    agent: {
-      prompt: { prompt: string };
-      first_message: string;
-      language: string;
+  name?: string;
+  platform_settings?: {
+    widget_settings?: { name?: string };
+  };
+  conversation_config?: {
+    agent?: {
+      prompt?: { prompt?: string };
+      first_message?: string;
+      language?: string;
       tools?: any[];
     };
   };
-  tts_config: {
-    voice_id: string;
+  tts_config?: {
+    voice_id?: string;
   };
 }
 
@@ -48,6 +51,15 @@ export default function ElevenLabsAgentsPage() {
   const [editVoiceId, setEditVoiceId] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  const getAgentName = (agent: Agent) =>
+    agent.name ||
+    agent.platform_settings?.widget_settings?.name ||
+    (agent.agent_id ? `Agent ${agent.agent_id.slice(0, 8)}` : 'Agent');
+
+  const getLanguage = (agent: Agent) => agent.conversation_config?.agent?.language || '';
+  const getPrompt = (agent: Agent) => agent.conversation_config?.agent?.prompt?.prompt || '';
+  const getToolsCount = (agent: Agent) => agent.conversation_config?.agent?.tools?.length || 0;
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -84,7 +96,8 @@ export default function ElevenLabsAgentsPage() {
         api.get(`/api/elevenlabs/voices/${clientId}`)
       ]);
       
-      setAgents(agentsRes.data.agents || []);
+      const rawAgents = Array.isArray(agentsRes.data?.agents) ? agentsRes.data.agents : [];
+      setAgents(rawAgents.filter(Boolean));
       setVoices(voicesRes.data.voices || []);
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
@@ -94,13 +107,30 @@ export default function ElevenLabsAgentsPage() {
     }
   };
 
-  const handleEdit = (agent: Agent) => {
-    setSelectedAgent(agent);
-    setEditName(agent.name);
-    setEditPrompt(agent.conversation_config.agent.prompt.prompt);
-    setEditFirstMessage(agent.conversation_config.agent.first_message || '');
-    setEditVoiceId(agent.tts_config.voice_id);
-    setShowEditor(true);
+  const handleEdit = async (agent: Agent) => {
+    setMessage(null);
+    try {
+      // List endpoint can return partial data; fetch full config before editing.
+      const res = await api.get(`/api/elevenlabs/agents/${tenantId}/${agent.agent_id}`);
+      const full: Agent = res.data || agent;
+
+      setSelectedAgent(full);
+      setEditName(getAgentName(full));
+      setEditPrompt(getPrompt(full));
+      setEditFirstMessage(full.conversation_config?.agent?.first_message || '');
+      setEditVoiceId(full.tts_config?.voice_id || '');
+      setShowEditor(true);
+    } catch (error) {
+      console.error('Erro ao carregar agent:', error);
+      // Fallback to whatever we have, but keep UI safe.
+      setSelectedAgent(agent);
+      setEditName(getAgentName(agent));
+      setEditPrompt(getPrompt(agent));
+      setEditFirstMessage(agent.conversation_config?.agent?.first_message || '');
+      setEditVoiceId(agent.tts_config?.voice_id || '');
+      setShowEditor(true);
+      setMessage({ type: 'error', text: 'Erro ao carregar detalhes do agent' });
+    }
   };
 
   const handleSave = async () => {
@@ -187,9 +217,9 @@ export default function ElevenLabsAgentsPage() {
                     <Mic className="w-5 h-5 text-purple-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900">{agent.name}</h3>
+                    <h3 className="font-semibold text-gray-900">{getAgentName(agent)}</h3>
                     <p className="text-xs text-gray-500">
-                      {agent.conversation_config.agent.language}
+                      {getLanguage(agent) || '—'}
                     </p>
                   </div>
                 </div>
@@ -199,15 +229,15 @@ export default function ElevenLabsAgentsPage() {
                 <div>
                   <p className="text-xs text-gray-500">System Prompt</p>
                   <p className="text-sm text-gray-700 line-clamp-3">
-                    {agent.conversation_config.agent.prompt.prompt}
+                    {getPrompt(agent) || '—'}
                   </p>
                 </div>
                 
-                {agent.conversation_config.agent.tools && (
+                {getToolsCount(agent) > 0 && (
                   <div>
                     <p className="text-xs text-gray-500">Tools</p>
                     <p className="text-sm text-gray-700">
-                      {agent.conversation_config.agent.tools.length} configuradas
+                      {getToolsCount(agent)} configuradas
                     </p>
                   </div>
                 )}
