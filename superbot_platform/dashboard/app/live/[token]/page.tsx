@@ -3,12 +3,28 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import {
-  Phone, Instagram, MessageCircle, User, Bot, Wrench, HandMetal,
+  MessageCircle, User, Bot, Wrench, HandMetal,
   AlertTriangle, Send, RotateCcw, ArrowLeft, Search, Clock,
   X, Calendar, ChevronRight
 } from 'lucide-react';
+import { getPlatformLogo } from '@/components/PlatformLogos';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Runtime API URL resolution (same as main app)
+let _portalApiUrl = '';
+let _portalApiResolved = false;
+
+async function getPortalApiUrl(): Promise<string> {
+  if (_portalApiResolved) return _portalApiUrl;
+  try {
+    const resp = await fetch('/api/config');
+    const data = await resp.json();
+    _portalApiUrl = (data.apiUrl || '').replace(/\/+$/, '');
+  } catch {
+    _portalApiUrl = '';
+  }
+  _portalApiResolved = true;
+  return _portalApiUrl;
+}
 
 interface Message {
   id: string;
@@ -36,7 +52,8 @@ interface Conversation {
 // ==================== API helpers ====================
 
 async function portalFetch(url: string, options?: RequestInit) {
-  const resp = await fetch(`${API_URL}${url}`, {
+  const baseUrl = await getPortalApiUrl();
+  const resp = await fetch(`${baseUrl}${url}`, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
   });
@@ -594,12 +611,9 @@ function ConversationView({
 // ==================== Shared Components ====================
 
 function ChannelIcon({ channel }: { channel: string }) {
-  switch (channel) {
-    case 'whatsapp': return <Phone className="w-5 h-5 text-green-500" />;
-    case 'instagram': return <Instagram className="w-5 h-5 text-pink-500" />;
-    case 'messenger': return <MessageCircle className="w-5 h-5 text-blue-500" />;
-    default: return <MessageCircle className="w-5 h-5 text-gray-500" />;
-  }
+  const logo = getPlatformLogo(channel, 20);
+  if (logo) return logo;
+  return <MessageCircle className="w-5 h-5 text-gray-500" />;
 }
 
 function StatusBadge({ status }: { status: string }) {
