@@ -1,16 +1,17 @@
 import axios, { AxiosRequestConfig } from 'axios';
 
 // Runtime API URL - fetched once from /api/config (Next.js server route)
-let _apiUrl: string | undefined;
+let _apiUrl = '';
+let _resolved = false;
 let _fetchPromise: Promise<string> | null = null;
 
 function getApiUrl(): Promise<string> {
-  if (_apiUrl !== undefined) return Promise.resolve(_apiUrl);
+  if (_resolved) return Promise.resolve(_apiUrl);
   if (!_fetchPromise) {
     _fetchPromise = fetch('/api/config')
       .then((r) => r.json())
-      .then((d) => { _apiUrl = d.apiUrl || ''; return _apiUrl; })
-      .catch(() => { _apiUrl = ''; return ''; });
+      .then((d) => { _apiUrl = d.apiUrl || ''; _resolved = true; return _apiUrl; })
+      .catch(() => { _apiUrl = ''; _resolved = true; return ''; });
   }
   return _fetchPromise;
 }
