@@ -4,31 +4,27 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   BarChart3, MessageCircle, Bot, Phone, BookOpen, Settings,
-  LogOut, ChevronLeft, Menu, ArrowLeftRight, X
+  LogOut, Menu, ArrowLeftRight, X, Globe
 } from 'lucide-react';
-
-interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ReactNode;
-  adminOnly?: boolean;
-}
-
-const navItems: NavItem[] = [
-  { label: 'Dashboard', href: '/dash', icon: <BarChart3 className="w-5 h-5" /> },
-  { label: 'Conversas', href: '/dash/conversations', icon: <MessageCircle className="w-5 h-5" /> },
-  { label: 'Ligacoes', href: '/dash/calls', icon: <Phone className="w-5 h-5" /> },
-  { label: 'Agentes de Voz', href: '/dash/agents', icon: <Bot className="w-5 h-5" />, adminOnly: true },
-  { label: 'Base de Conhecimento', href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
-  { label: 'Configuracoes', href: '/dash/config', icon: <Settings className="w-5 h-5" />, adminOnly: true },
-];
+import { useTranslation, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 
 export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
+  const { t, locale, setLocale } = useTranslation();
   const [user, setUser] = useState<any>(null);
   const [tenantName, setTenantName] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [langOpen, setLangOpen] = useState(false);
+
+  const navItems = [
+    { label: t.nav_dashboard, href: '/dash', icon: <BarChart3 className="w-5 h-5" /> },
+    { label: t.nav_conversations, href: '/dash/conversations', icon: <MessageCircle className="w-5 h-5" /> },
+    { label: t.nav_calls, href: '/dash/calls', icon: <Phone className="w-5 h-5" /> },
+    { label: t.nav_agents, href: '/dash/agents', icon: <Bot className="w-5 h-5" />, adminOnly: true },
+    { label: t.nav_rag, href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
+    { label: t.nav_config, href: '/dash/config', icon: <Settings className="w-5 h-5" />, adminOnly: true },
+  ];
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -101,8 +97,36 @@ export default function Sidebar() {
             className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition"
           >
             <ArrowLeftRight className="w-4 h-4" />
-            Trocar Cliente
+            {t.nav_switch_client}
           </button>
+        )}
+        {user?.role === 'admin' && (
+          <div className="relative">
+            <button
+              onClick={() => setLangOpen(!langOpen)}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition"
+            >
+              <Globe className="w-4 h-4" />
+              {LOCALE_LABELS[locale]}
+            </button>
+            {langOpen && (
+              <div className="absolute bottom-full left-0 w-full mb-1 bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
+                {(Object.keys(LOCALE_LABELS) as Locale[]).map((loc) => (
+                  <button
+                    key={loc}
+                    onClick={() => { setLocale(loc); setLangOpen(false); }}
+                    className={`w-full text-left px-4 py-2 text-sm transition ${
+                      locale === loc
+                        ? 'bg-blue-600/20 text-blue-400'
+                        : 'text-gray-300 hover:bg-gray-700'
+                    }`}
+                  >
+                    {LOCALE_LABELS[loc]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <div className="flex items-center gap-3 px-3 py-2">
           <div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center text-sm font-medium text-gray-300">
@@ -115,7 +139,7 @@ export default function Sidebar() {
           <button
             onClick={handleLogout}
             className="p-1.5 hover:bg-gray-800 rounded-lg transition"
-            title="Sair"
+            title={t.nav_logout}
           >
             <LogOut className="w-4 h-4 text-gray-500" />
           </button>

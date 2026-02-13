@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useTranslation } from '@/lib/i18n';
 import {
   Phone, Clock, CheckCircle, XCircle, TrendingUp,
   Play, X, User, Mail, FileText, Loader2, ChevronDown
@@ -47,10 +48,13 @@ function formatDuration(secs: number): string {
 
 export default function CallsPage() {
   const router = useRouter();
+  const { t, locale } = useTranslation();
   const [calls, setCalls] = useState<CallSummary[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [tenantId, setTenantId] = useState('');
+
+  const dateLocale = locale === 'pt' ? 'pt-BR' : locale === 'es' ? 'es-ES' : 'en-US';
 
   // Filters
   const [days, setDays] = useState(30);
@@ -107,8 +111,8 @@ export default function CallsPage() {
     <div className="p-6 lg:p-8">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Historico de Ligacoes</h1>
-        <p className="text-sm text-gray-500 mt-1">Ligacoes realizadas pelos agentes de voz ElevenLabs</p>
+        <h1 className="text-2xl font-bold text-gray-900">{t.calls_title}</h1>
+        <p className="text-sm text-gray-500 mt-1">{t.calls_subtitle}</p>
       </div>
 
       {/* KPI Cards */}
@@ -121,7 +125,7 @@ export default function CallsPage() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-                <p className="text-xs text-gray-500">Total ({days}d)</p>
+                <p className="text-xs text-gray-500">{t.calls_total} ({days}d)</p>
               </div>
             </div>
           </div>
@@ -132,7 +136,7 @@ export default function CallsPage() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900">{formatDuration(stats.avg_duration_secs)}</p>
-                <p className="text-xs text-gray-500">Duracao media</p>
+                <p className="text-xs text-gray-500">{t.calls_avg_duration}</p>
               </div>
             </div>
           </div>
@@ -143,7 +147,7 @@ export default function CallsPage() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900">{stats.success_rate}%</p>
-                <p className="text-xs text-gray-500">Taxa de sucesso</p>
+                <p className="text-xs text-gray-500">{t.calls_success_rate}</p>
               </div>
             </div>
           </div>
@@ -154,7 +158,7 @@ export default function CallsPage() {
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900">{stats.today}</p>
-                <p className="text-xs text-gray-500">Hoje</p>
+                <p className="text-xs text-gray-500">{t.calls_today}</p>
               </div>
             </div>
           </div>
@@ -165,36 +169,36 @@ export default function CallsPage() {
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-6">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600">Periodo:</label>
+            <label className="text-sm text-gray-600">{t.calls_period}:</label>
             <select
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
               className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
             >
-              <option value={7}>7 dias</option>
-              <option value={14}>14 dias</option>
-              <option value={30}>30 dias</option>
+              <option value={7}>{t.dash_days_7}</option>
+              <option value={14}>{t.dash_days_14}</option>
+              <option value={30}>{t.dash_days_30}</option>
               <option value={60}>60 dias</option>
               <option value={90}>90 dias</option>
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600">Status:</label>
+            <label className="text-sm text-gray-600">{t.calls_status}:</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
             >
-              <option value="">Todos</option>
-              <option value="successful">Sucesso</option>
-              <option value="failed">Falha</option>
+              <option value="">{t.calls_all}</option>
+              <option value="successful">{t.calls_success}</option>
+              <option value="failed">{t.calls_failed}</option>
             </select>
           </div>
           <button
             onClick={handleFilter}
             className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition"
           >
-            Filtrar
+            {t.calls_filter}
           </button>
         </div>
       </div>
@@ -209,27 +213,27 @@ export default function CallsPage() {
           ) : calls.length === 0 ? (
             <div className="text-center py-12">
               <Phone className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500">Nenhuma ligacao encontrada</p>
-              <p className="text-sm text-gray-400 mt-1">As ligacoes aparecerao aqui quando o webhook estiver configurado</p>
+              <p className="text-gray-500">{t.calls_no_calls}</p>
+              <p className="text-sm text-gray-400 mt-1">{t.calls_no_calls_desc}</p>
             </div>
           ) : (
             <table className="w-full">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data/Hora</th>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">Telefone</th>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">Agente</th>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duracao</th>
-                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-5 py-3 text-right text-xs font-medium text-gray-500 uppercase">Acao</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t.calls_date}</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t.calls_client}</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t.calls_phone}</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t.calls_agent}</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t.calls_duration}</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t.calls_status}</th>
+                  <th className="px-5 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t.calls_action}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {calls.map((call) => (
                   <tr key={call.id} className="hover:bg-gray-50 transition cursor-pointer" onClick={() => openDetail(call.id)}>
                     <td className="px-5 py-3 text-sm text-gray-900">
-                      {call.start_time ? new Date(call.start_time).toLocaleString('pt-BR', {
+                      {call.start_time ? new Date(call.start_time).toLocaleString(dateLocale, {
                         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
                       }) : '-'}
                     </td>
@@ -249,13 +253,13 @@ export default function CallsPage() {
                           : 'bg-red-50 text-red-700 border border-red-200'
                       }`}>
                         {call.call_successful
-                          ? <><CheckCircle className="w-3 h-3" /> Sucesso</>
-                          : <><XCircle className="w-3 h-3" /> Falha</>}
+                          ? <><CheckCircle className="w-3 h-3" /> {t.calls_success}</>
+                          : <><XCircle className="w-3 h-3" /> {t.calls_failed}</>}
                       </span>
                     </td>
                     <td className="px-5 py-3 text-right">
                       <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                        Ver
+                        {t.calls_view}
                       </button>
                     </td>
                   </tr>
@@ -279,9 +283,9 @@ export default function CallsPage() {
                 {/* Header */}
                 <div className="px-6 py-4 border-b flex justify-between items-center flex-shrink-0">
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">Detalhe da Ligacao</h3>
+                    <h3 className="text-lg font-semibold text-gray-900">{t.calls_detail_title}</h3>
                     <p className="text-xs text-gray-500">
-                      {selectedCall.start_time ? new Date(selectedCall.start_time).toLocaleString('pt-BR') : ''}
+                      {selectedCall.start_time ? new Date(selectedCall.start_time).toLocaleString(dateLocale) : ''}
                     </p>
                   </div>
                   <button onClick={() => setSelectedCall(null)} className="p-1 hover:bg-gray-100 rounded-lg">
@@ -296,28 +300,28 @@ export default function CallsPage() {
                     <div className="flex items-center gap-2">
                       <User className="w-4 h-4 text-gray-400" />
                       <div>
-                        <p className="text-xs text-gray-500">Nome</p>
+                        <p className="text-xs text-gray-500">{t.calls_name}</p>
                         <p className="text-sm font-medium text-gray-900">{selectedCall.customer_name || '-'}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Phone className="w-4 h-4 text-gray-400" />
                       <div>
-                        <p className="text-xs text-gray-500">Telefone</p>
+                        <p className="text-xs text-gray-500">{t.calls_phone}</p>
                         <p className="text-sm font-medium text-gray-900">{selectedCall.customer_phone || '-'}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Mail className="w-4 h-4 text-gray-400" />
                       <div>
-                        <p className="text-xs text-gray-500">Email</p>
+                        <p className="text-xs text-gray-500">{t.calls_email}</p>
                         <p className="text-sm font-medium text-gray-900">{selectedCall.customer_email || '-'}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Clock className="w-4 h-4 text-gray-400" />
                       <div>
-                        <p className="text-xs text-gray-500">Duracao</p>
+                        <p className="text-xs text-gray-500">{t.calls_duration}</p>
                         <p className="text-sm font-medium text-gray-900">{formatDuration(selectedCall.call_duration_secs)}</p>
                       </div>
                     </div>
@@ -330,11 +334,11 @@ export default function CallsPage() {
                         ? 'bg-green-50 text-green-700 border border-green-200'
                         : 'bg-red-50 text-red-700 border border-red-200'
                     }`}>
-                      {selectedCall.call_successful ? 'Sucesso' : 'Falha'}
+                      {selectedCall.call_successful ? t.calls_success : t.calls_failed}
                     </span>
                     {selectedCall.termination_reason && (
                       <span className="text-sm text-gray-500">
-                        Motivo: {selectedCall.termination_reason}
+                        {t.calls_termination}: {selectedCall.termination_reason}
                       </span>
                     )}
                   </div>
@@ -343,7 +347,7 @@ export default function CallsPage() {
                   {selectedCall.transcript_summary && (
                     <div>
                       <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                        <FileText className="w-4 h-4" /> Resumo
+                        <FileText className="w-4 h-4" /> {t.calls_summary}
                       </h4>
                       <p className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
                         {selectedCall.transcript_summary}
@@ -374,7 +378,7 @@ export default function CallsPage() {
 
                     return (
                       <div>
-                        <h4 className="text-sm font-semibold text-gray-700 mb-2">Dados Coletados</h4>
+                        <h4 className="text-sm font-semibold text-gray-700 mb-2">{t.calls_data_collected}</h4>
                         <div className="bg-gray-50 rounded-lg p-3 space-y-1">
                           {entries.map((e) => (
                             <div key={e.label} className="flex items-center gap-2 text-sm">
@@ -391,19 +395,19 @@ export default function CallsPage() {
                   {selectedCall.audio_url && (
                     <div>
                       <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                        <Play className="w-4 h-4" /> Audio
+                        <Play className="w-4 h-4" /> {t.calls_audio}
                       </h4>
                       <audio controls className="w-full" src={selectedCall.audio_url}>
                         Seu navegador nao suporta audio.
                       </audio>
-                      <p className="text-xs text-gray-400 mt-1">Link expira em 30 dias</p>
+                      <p className="text-xs text-gray-400 mt-1">{t.calls_audio_expires}</p>
                     </div>
                   )}
 
                   {/* Transcript */}
                   {selectedCall.transcript && selectedCall.transcript.length > 0 && (
                     <div>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-2">Transcricao</h4>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-2">{t.calls_transcript}</h4>
                       <div className="bg-gray-50 rounded-lg p-4 space-y-3 max-h-80 overflow-y-auto">
                         {selectedCall.transcript.map((entry, i) => (
                           <div key={i} className={`flex ${entry.role === 'agent' ? 'justify-start' : 'justify-end'}`}>
@@ -413,7 +417,7 @@ export default function CallsPage() {
                                 : 'bg-blue-600 text-white'
                             }`}>
                               <p className="text-xs opacity-60 mb-0.5 font-medium">
-                                {entry.role === 'agent' ? 'Agente' : 'Cliente'}
+                                {entry.role === 'agent' ? t.detail_agent : t.calls_client}
                                 {entry.time_in_call_secs !== undefined && ` - ${formatDuration(entry.time_in_call_secs)}`}
                               </p>
                               <p>{entry.message}</p>

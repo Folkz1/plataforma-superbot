@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { useTranslation } from '@/lib/i18n';
 import {
   MessageCircle, TrendingUp, Clock, CheckCircle, Loader2
 } from 'lucide-react';
@@ -11,6 +12,7 @@ import { StatusBarChart } from '@/components/charts/StatusBarChart';
 import { HourlyBarChart } from '@/components/charts/HourlyBarChart';
 
 export default function DashboardPage() {
+  const { t } = useTranslation();
   const [tenantName, setTenantName] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -67,7 +69,7 @@ export default function DashboardPage() {
   if (!overview) {
     return (
       <div className="flex items-center justify-center h-96">
-        <p className="text-gray-600">Erro ao carregar dados</p>
+        <p className="text-gray-600">{t.common_error}</p>
       </div>
     );
   }
@@ -75,7 +77,7 @@ export default function DashboardPage() {
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{t.dash_title}</h1>
         <p className="text-sm text-gray-500 mt-1">{tenantName} - Visao geral</p>
       </div>
 
@@ -83,7 +85,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-gray-500">Total Conversas</p>
+            <p className="text-sm font-medium text-gray-500">{t.dash_total_conversations}</p>
             <div className="p-2 bg-blue-50 rounded-lg"><MessageCircle className="w-4 h-4 text-blue-600" /></div>
           </div>
           <p className="text-3xl font-bold text-gray-900">{overview.total_conversations}</p>
@@ -110,7 +112,7 @@ export default function DashboardPage() {
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-gray-500">Conversas Ativas</p>
+            <p className="text-sm font-medium text-gray-500">{t.dash_active_conversations}</p>
             <div className="p-2 bg-purple-50 rounded-lg"><TrendingUp className="w-4 h-4 text-purple-600" /></div>
           </div>
           <p className="text-3xl font-bold text-gray-900">{overview.active_conversations}</p>

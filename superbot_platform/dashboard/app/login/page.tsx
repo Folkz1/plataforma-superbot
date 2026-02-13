@@ -4,9 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { Lock, Mail, AlertCircle, Loader2 } from 'lucide-react';
+import { useTranslation } from '@/lib/i18n';
 
 export default function LoginPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -39,7 +41,7 @@ export default function LoginPage() {
       router.push(user?.role === 'admin' ? '/admin' : '/dash');
     } catch (err: any) {
       console.error('Erro no login:', err);
-      setError(err.response?.data?.detail || 'Usuário ou senha inválidos');
+      setError(err.response?.data?.detail || t.login_error);
     } finally {
       setLoading(false);
     }
@@ -67,10 +69,10 @@ export default function LoginPage() {
           {/* Title */}
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-gray-900 mb-2">
-              SuperBot Dashboard
+              {t.login_title}
             </h1>
             <p className="text-gray-600">
-              Faça login para continuar
+              {t.login_subtitle}
             </p>
           </div>
 
@@ -87,7 +89,7 @@ export default function LoginPage() {
             {/* Username */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Usuário
+                {t.login_user}
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -99,7 +101,7 @@ export default function LoginPage() {
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
                   className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-                  placeholder="Digite seu usuário"
+                  placeholder={t.login_user_placeholder}
                   required
                 />
               </div>
@@ -108,7 +110,7 @@ export default function LoginPage() {
             {/* Password */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Senha
+                {t.login_password}
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -120,7 +122,7 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
                   className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-                  placeholder="Digite sua senha"
+                  placeholder={t.login_password_placeholder}
                   required
                 />
               </div>
@@ -135,10 +137,10 @@ export default function LoginPage() {
               {loading ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  Entrando...
+                  {t.login_loading}
                 </>
               ) : (
-                'Entrar'
+                t.login_submit
               )}
             </button>
           </form>
