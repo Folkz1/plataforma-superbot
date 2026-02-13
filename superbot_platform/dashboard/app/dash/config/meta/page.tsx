@@ -509,7 +509,7 @@ export default function MetaConfigWizardPage() {
                   value={notificationPhone}
                   onChange={(e) => setNotificationPhone(e.target.value)}
                   placeholder="559999999999"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Usado para receber resumo/feedback de conversas encerradas.
@@ -524,7 +524,7 @@ export default function MetaConfigWizardPage() {
                   value={whatsappPhoneNumberId}
                   onChange={(e) => setWhatsappPhoneNumberId(e.target.value)}
                   placeholder="974597825733636"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 />
                 <div className="mt-1 text-xs text-gray-500">
                   Token atual: {whatsappHasToken ? 'configurado' : 'não configurado'}
@@ -540,7 +540,7 @@ export default function MetaConfigWizardPage() {
                   value={whatsappAccessToken}
                   onChange={(e) => setWhatsappAccessToken(e.target.value)}
                   placeholder="Cole aqui para atualizar"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Se deixar em branco, mantemos o token atual.
@@ -607,7 +607,7 @@ export default function MetaConfigWizardPage() {
                 <select
                   value={newChannelType}
                   onChange={(e) => setNewChannelType(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 >
                   <option value="whatsapp">whatsapp</option>
                   <option value="messenger">messenger</option>
@@ -624,7 +624,7 @@ export default function MetaConfigWizardPage() {
                   value={newChannelIdentifier}
                   onChange={(e) => setNewChannelIdentifier(e.target.value)}
                   placeholder="phone_number_id / page_id / ig_id / etc"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 />
               </div>
 
@@ -637,7 +637,7 @@ export default function MetaConfigWizardPage() {
                   value={newChannelAccessToken}
                   onChange={(e) => setNewChannelAccessToken(e.target.value)}
                   placeholder="Cole aqui para atualizar"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 />
                 <div className="mt-2 flex items-center gap-3">
                   <button
@@ -693,7 +693,7 @@ export default function MetaConfigWizardPage() {
                         value={followupConfigText}
                         onChange={(e) => setFollowupConfigText(e.target.value)}
                         rows={10}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono bg-white text-gray-900"
                       />
                       <p className="text-xs text-gray-500 mt-1">
                         Dica: use channels.whatsapp.stages e/ou channels.whatsapp.ai_reengagement conforme o guia.
@@ -723,7 +723,7 @@ export default function MetaConfigWizardPage() {
                         value={feedbackConfigText}
                         onChange={(e) => setFeedbackConfigText(e.target.value)}
                         rows={6}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono bg-white text-gray-900"
                       />
                       <p className="text-xs text-gray-500 mt-1">
                         Ex.: {"{\"base_url\":\"https://ai.superbot.digital\"}"} para montar links do form.

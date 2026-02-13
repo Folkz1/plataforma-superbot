@@ -41,6 +41,8 @@ _cors_origins = [
     "http://localhost:3001",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
+    "https://app.superbot.digital",
+    "https://aplicativos-plataforma-superbot.gtzkxz.easypanel.host",
 ]
 _extra = os.getenv("CORS_ORIGINS", "")
 if _extra:

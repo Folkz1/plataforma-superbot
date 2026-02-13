@@ -97,8 +97,8 @@ export default function ElevenLabsAgentsPage() {
       ]);
       
       const rawAgents = Array.isArray(agentsRes.data?.agents) ? agentsRes.data.agents : [];
-      setAgents(rawAgents.filter(Boolean));
-      setVoices(voicesRes.data.voices || []);
+      setAgents(rawAgents.filter((a: any) => a && typeof a === 'object' && a.agent_id));
+      setVoices(Array.isArray(voicesRes.data?.voices) ? voicesRes.data.voices : []);
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
       setMessage({ type: 'error', text: 'Erro ao carregar agents' });
@@ -288,7 +288,7 @@ export default function ElevenLabsAgentsPage() {
                   type="text"
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-gray-900"
                 />
               </div>
 
@@ -301,7 +301,7 @@ export default function ElevenLabsAgentsPage() {
                   value={editPrompt}
                   onChange={(e) => setEditPrompt(e.target.value)}
                   rows={12}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm bg-white text-gray-900"
                 />
               </div>
 
@@ -314,7 +314,7 @@ export default function ElevenLabsAgentsPage() {
                   value={editFirstMessage}
                   onChange={(e) => setEditFirstMessage(e.target.value)}
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-gray-900"
                 />
               </div>
 
