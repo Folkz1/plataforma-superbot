@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { 
-  CheckCircle, Circle, Phone, Instagram, MessageCircle,
+import {
+  CheckCircle, Circle,
   Copy, ExternalLink, AlertCircle, Check
 } from 'lucide-react';
+import { WhatsAppLogo, MessengerLogo, InstagramLogo, getPlatformLogo } from '@/components/PlatformLogos';
 
 type Step = {
   id: number;
@@ -426,13 +427,7 @@ export default function MetaConfigWizardPage() {
     }
   };
 
-  const getIcon = (platformName: string) => {
-    switch (platformName) {
-      case 'whatsapp': return <Phone className="w-5 h-5" />;
-      case 'instagram': return <Instagram className="w-5 h-5" />;
-      case 'messenger': return <MessageCircle className="w-5 h-5" />;
-    }
-  };
+  const getIcon = (platformName: string) => getPlatformLogo(platformName, 24);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -761,8 +756,8 @@ export default function MetaConfigWizardPage() {
               }`}
             >
               <div className="flex flex-col items-center gap-2">
-                <Phone className={`w-8 h-8 ${platform === 'whatsapp' ? 'text-green-600' : 'text-gray-600'}`} />
-                <span className="font-medium">WhatsApp</span>
+                <WhatsAppLogo size={36} />
+                <span className="font-medium text-gray-900">WhatsApp</span>
               </div>
             </button>
 
@@ -775,8 +770,8 @@ export default function MetaConfigWizardPage() {
               }`}
             >
               <div className="flex flex-col items-center gap-2">
-                <MessageCircle className={`w-8 h-8 ${platform === 'messenger' ? 'text-blue-600' : 'text-gray-600'}`} />
-                <span className="font-medium">Messenger</span>
+                <MessengerLogo size={36} />
+                <span className="font-medium text-gray-900">Messenger</span>
               </div>
             </button>
 
@@ -789,8 +784,8 @@ export default function MetaConfigWizardPage() {
               }`}
             >
               <div className="flex flex-col items-center gap-2">
-                <Instagram className={`w-8 h-8 ${platform === 'instagram' ? 'text-pink-600' : 'text-gray-600'}`} />
-                <span className="font-medium">Instagram</span>
+                <InstagramLogo size={36} />
+                <span className="font-medium text-gray-900">Instagram</span>
               </div>
             </button>
           </div>

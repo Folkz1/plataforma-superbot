@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { 
-  Phone, Instagram, MessageCircle, CheckCircle, 
-  XCircle, AlertCircle, Settings, Loader2 
+import {
+  CheckCircle, XCircle, AlertCircle, Settings, Loader2
 } from 'lucide-react';
+import { getPlatformLogo } from '@/components/PlatformLogos';
 
 interface ConnectionStatus {
   platform: 'whatsapp' | 'messenger' | 'instagram';
@@ -79,28 +79,11 @@ export default function ConnectionStatusPage() {
     }
   };
 
-  const getIcon = (platform: string) => {
-    switch (platform) {
-      case 'whatsapp': return <Phone className="w-6 h-6" />;
-      case 'instagram': return <Instagram className="w-6 h-6" />;
-      case 'messenger': return <MessageCircle className="w-6 h-6" />;
-    }
-  };
-
-  const getPlatformColor = (platform: string) => {
-    switch (platform) {
-      case 'whatsapp': return 'green';
-      case 'instagram': return 'pink';
-      case 'messenger': return 'blue';
-      default: return 'gray';
-    }
-  };
-
   const getPlatformBgClass = (platform: string) => {
     switch (platform) {
-      case 'whatsapp': return 'bg-green-100';
-      case 'instagram': return 'bg-pink-100';
-      case 'messenger': return 'bg-blue-100';
+      case 'whatsapp': return 'bg-green-50';
+      case 'instagram': return 'bg-pink-50';
+      case 'messenger': return 'bg-blue-50';
       default: return 'bg-gray-100';
     }
   };
@@ -156,8 +139,8 @@ export default function ConnectionStatusPage() {
             return (
               <div key={conn.platform} className="bg-white rounded-lg shadow p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <div className={`p-3 rounded-lg ${getPlatformBgClass(conn.platform)}`}>
-                    {getIcon(conn.platform)}
+                  <div className={`p-2 rounded-lg ${getPlatformBgClass(conn.platform)}`}>
+                    {getPlatformLogo(conn.platform, 36)}
                   </div>
                   {isConnected ? (
                     <CheckCircle className="w-6 h-6 text-green-600" />

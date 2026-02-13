@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useConversation } from '@/hooks/useConversation';
 import {
-  ArrowLeft, Phone, Instagram, MessageCircle, User, Bot, Wrench,
+  ArrowLeft, MessageCircle, User, Bot, Wrench,
   RefreshCw, Send, HandMetal, RotateCcw, Share2, Copy, Check, X,
   AlertTriangle, Clock
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { getPlatformLogo } from '@/components/PlatformLogos';
 
 interface Message {
   id: string;
@@ -123,16 +124,8 @@ export default function ConversationViewerPage() {
   };
 
   const getChannelIcon = (channel: string) => {
-    switch (channel) {
-      case 'whatsapp':
-        return <Phone className="w-5 h-5 text-green-600" />;
-      case 'instagram':
-        return <Instagram className="w-5 h-5 text-pink-600" />;
-      case 'messenger':
-        return <MessageCircle className="w-5 h-5 text-blue-600" />;
-      default:
-        return <MessageCircle className="w-5 h-5 text-gray-600" />;
-    }
+    const logo = getPlatformLogo(channel, 20);
+    return logo || <MessageCircle className="w-5 h-5 text-gray-600" />;
   };
 
   const getMessageIcon = (direction: string, message_type: string) => {

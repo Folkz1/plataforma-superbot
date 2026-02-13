@@ -2,8 +2,8 @@
 
 import { useRouter } from 'next/navigation';
 import {
-  Settings, Activity, Phone, Instagram, MessageCircle,
-  FileText, TestTube, BarChart3, Users, MessageSquare, Clock
+  Settings, Activity,
+  BarChart3, Users, MessageSquare, Clock
 } from 'lucide-react';
 
 export default function ConfigIndexPage() {

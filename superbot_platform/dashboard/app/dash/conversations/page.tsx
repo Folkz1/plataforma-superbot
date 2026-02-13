@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { MessageSquare, Search, Clock, Phone, Instagram, MessageCircle } from 'lucide-react';
+import { MessageSquare, Search, Clock, MessageCircle } from 'lucide-react';
 import { api } from '@/lib/api';
+import { getPlatformLogo } from '@/components/PlatformLogos';
 
 interface Conversation {
   project_id: string;
@@ -56,12 +57,8 @@ export default function ConversationsPage() {
   });
 
   const getChannelIcon = (channel: string) => {
-    switch (channel) {
-      case 'whatsapp': return <Phone className="w-5 h-5 text-green-600" />;
-      case 'instagram': return <Instagram className="w-5 h-5 text-pink-600" />;
-      case 'messenger': return <MessageCircle className="w-5 h-5 text-blue-600" />;
-      default: return <MessageCircle className="w-5 h-5 text-gray-400" />;
-    }
+    const logo = getPlatformLogo(channel, 20);
+    return logo || <MessageCircle className="w-5 h-5 text-gray-400" />;
   };
 
   const getStatusBadge = (status: string) => {
