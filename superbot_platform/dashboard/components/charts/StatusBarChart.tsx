@@ -12,15 +12,23 @@ interface StatusBarChartProps {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  open: '#f59e0b',
-  resolved: '#10b981',
+  open: '#22c55e',
+  waiting_customer: '#eab308',
+  handoff: '#f59e0b',
+  closed: '#6b7280',
+  resolved: '#3b82f6',
+  do_not_contact: '#ef4444',
   abandoned: '#ef4444',
   default: '#6b7280'
 };
 
 const STATUS_LABELS: Record<string, string> = {
   open: 'Abertas',
+  waiting_customer: 'Aguardando Cliente',
+  handoff: 'Atendimento Humano',
+  closed: 'Fechadas',
   resolved: 'Resolvidas',
+  do_not_contact: 'Não Contactar',
   abandoned: 'Abandonadas'
 };
 

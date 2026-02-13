@@ -230,10 +230,19 @@ export default function ConversationViewerPage() {
 
               <span className={`px-3 py-1 text-xs font-medium rounded-full ${
                 conversation.status === 'open' ? 'bg-green-100 text-green-800' :
+                conversation.status === 'waiting_customer' ? 'bg-yellow-100 text-yellow-800' :
                 conversation.status === 'handoff' ? 'bg-amber-100 text-amber-800' :
+                conversation.status === 'do_not_contact' ? 'bg-red-100 text-red-800' :
                 'bg-gray-100 text-gray-800'
               }`}>
-                {conversation.status === 'handoff' ? 'Atendimento Humano' : conversation.status}
+                {{
+                  open: 'Aberto',
+                  waiting_customer: 'Aguardando Cliente',
+                  handoff: 'Atendimento Humano',
+                  closed: 'Fechado',
+                  resolved: 'Resolvido',
+                  do_not_contact: 'Não Contactar',
+                }[conversation.status] || conversation.status}
               </span>
             </div>
           </div>

@@ -619,13 +619,17 @@ function ChannelIcon({ channel }: { channel: string }) {
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     open: 'bg-green-500/20 text-green-400',
+    waiting_customer: 'bg-yellow-500/20 text-yellow-400',
     handoff: 'bg-amber-500/20 text-amber-400',
     closed: 'bg-gray-700 text-gray-400',
+    do_not_contact: 'bg-red-500/20 text-red-400',
   };
   const labels: Record<string, string> = {
     open: 'Aberto',
-    handoff: 'Humano',
+    waiting_customer: 'Aguardando Cliente',
+    handoff: 'Atendimento Humano',
     closed: 'Fechado',
+    do_not_contact: 'Não Contactar',
   };
   return (
     <span className={`px-2.5 py-0.5 text-xs font-medium rounded-full ${styles[status] || styles.closed}`}>

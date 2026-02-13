@@ -64,18 +64,22 @@ export default function ConversationsPage() {
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
       open: 'bg-green-100 text-green-700',
+      waiting_customer: 'bg-yellow-100 text-yellow-700',
       handoff: 'bg-amber-100 text-amber-700',
       closed: 'bg-gray-100 text-gray-600',
       resolved: 'bg-blue-100 text-blue-700',
+      do_not_contact: 'bg-red-100 text-red-700',
     };
     const labels: Record<string, string> = {
       open: 'Aberto',
-      handoff: 'Humano',
+      waiting_customer: 'Aguardando Cliente',
+      handoff: 'Atendimento Humano',
       closed: 'Fechado',
       resolved: 'Resolvido',
+      do_not_contact: 'Não Contactar',
     };
     return (
-      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] || styles.open}`}>
+      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] || 'bg-gray-100 text-gray-600'}`}>
         {labels[status] || status}
       </span>
     );
@@ -116,7 +120,8 @@ export default function ConversationsPage() {
         >
           <option value="all">Todos</option>
           <option value="open">Abertos</option>
-          <option value="handoff">Humano</option>
+          <option value="waiting_customer">Aguardando Cliente</option>
+          <option value="handoff">Atendimento Humano</option>
           <option value="closed">Fechados</option>
         </select>
       </div>
