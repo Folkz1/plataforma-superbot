@@ -11,15 +11,16 @@ interface NavItem {
   label: string;
   href: string;
   icon: React.ReactNode;
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', href: '/dash', icon: <BarChart3 className="w-5 h-5" /> },
   { label: 'Conversas', href: '/dash/conversations', icon: <MessageCircle className="w-5 h-5" /> },
-  { label: 'Agentes de Voz', href: '/dash/agents', icon: <Bot className="w-5 h-5" /> },
   { label: 'Ligacoes', href: '/dash/calls', icon: <Phone className="w-5 h-5" /> },
-  { label: 'Base de Conhecimento', href: '/dash/rag', icon: <BookOpen className="w-5 h-5" /> },
-  { label: 'Configuracoes', href: '/dash/config', icon: <Settings className="w-5 h-5" /> },
+  { label: 'Agentes de Voz', href: '/dash/agents', icon: <Bot className="w-5 h-5" />, adminOnly: true },
+  { label: 'Base de Conhecimento', href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
+  { label: 'Configuracoes', href: '/dash/config', icon: <Settings className="w-5 h-5" />, adminOnly: true },
 ];
 
 export default function Sidebar() {
@@ -79,7 +80,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {navItems.map((item) => {
+        {navItems.filter(item => !item.adminOnly || user?.role === 'admin').map((item) => {
           const active = isActive(item.href);
           return (
             <button

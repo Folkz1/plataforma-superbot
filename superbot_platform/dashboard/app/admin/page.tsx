@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import {
   Plus, Edit, Trash2, Users, BarChart3, X, Bot,
-  Link2, Copy, CheckCircle, AlertCircle, Loader2, LogOut
+  Link2, Copy, CheckCircle, AlertCircle, Loader2, LogOut,
+  UserPlus, Key, Eye, EyeOff
 } from 'lucide-react';
 
 interface Client {
@@ -76,6 +77,16 @@ export default function AdminDashboard() {
   // Portal link
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // User management
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [userModalClientId, setUserModalClientId] = useState<string>('');
+  const [userForm, setUserForm] = useState({ email: '', password: '', name: '' });
+  const [userSaving, setUserSaving] = useState(false);
+  const [userMessage, setUserMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [clientUsers, setClientUsers] = useState<Record<string, any[]>>({});
+  const [showPassword, setShowPassword] = useState(false);
+  const [expandedUsers, setExpandedUsers] = useState<string | null>(null);
+
   useEffect(() => {
     const userData = localStorage.getItem('user');
     if (!userData) { router.push('/login'); return; }
@@ -83,6 +94,7 @@ export default function AdminDashboard() {
     if (parsedUser.role !== 'admin') { router.push('/dash'); return; }
     setUser(parsedUser);
     loadClients();
+    loadAllUsers();
   }, [router]);
 
   const loadClients = async () => {
@@ -94,6 +106,70 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadAllUsers = async () => {
+    try {
+      const res = await api.get('/api/users');
+      const grouped: Record<string, any[]> = {};
+      for (const u of res.data) {
+        if (u.client_id) {
+          if (!grouped[u.client_id]) grouped[u.client_id] = [];
+          grouped[u.client_id].push(u);
+        }
+      }
+      setClientUsers(grouped);
+    } catch {}
+  };
+
+  const openUserModal = (clientId: string) => {
+    setUserModalClientId(clientId);
+    setUserForm({ email: '', password: '', name: '' });
+    setUserMessage(null);
+    setShowPassword(false);
+    setShowUserModal(true);
+  };
+
+  const handleCreateUser = async () => {
+    if (!userForm.email || !userForm.password || !userForm.name) {
+      setUserMessage({ type: 'error', text: 'Preencha todos os campos' });
+      return;
+    }
+    setUserSaving(true);
+    setUserMessage(null);
+    try {
+      await api.post('/api/users', {
+        email: userForm.email,
+        password: userForm.password,
+        name: userForm.name,
+        role: 'client',
+        client_id: userModalClientId,
+      });
+      setUserMessage({ type: 'success', text: 'Usuário criado com sucesso!' });
+      await loadAllUsers();
+      setTimeout(() => setShowUserModal(false), 800);
+    } catch (err: any) {
+      setUserMessage({ type: 'error', text: err.response?.data?.detail || 'Erro ao criar usuário' });
+    } finally {
+      setUserSaving(false);
+    }
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    if (!confirm('Tem certeza que deseja excluir este usuário?')) return;
+    try {
+      await api.delete(`/api/users/${userId}`);
+      await loadAllUsers();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Erro ao excluir');
+    }
+  };
+
+  const handleToggleUserActive = async (userId: string, isActive: boolean) => {
+    try {
+      await api.patch(`/api/users/${userId}`, { is_active: !isActive });
+      await loadAllUsers();
+    } catch {}
   };
 
   const handleLogout = () => {
@@ -342,7 +418,8 @@ export default function AdminDashboard() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {clients.map((client) => (
-                  <tr key={client.id} className="hover:bg-gray-50 transition">
+                  <React.Fragment key={client.id}>
+                  <tr className="hover:bg-gray-50 transition">
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">{client.name}</div>
                     </td>
@@ -379,6 +456,21 @@ export default function AdminDashboard() {
                           {copiedId === client.id ? <CheckCircle className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
                         </button>
                         <button
+                          onClick={() => openUserModal(client.id)}
+                          className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition"
+                          title="Criar Login para Cliente"
+                        >
+                          <UserPlus className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setExpandedUsers(expandedUsers === client.id ? null : client.id)}
+                          className={`p-2 rounded-lg transition ${clientUsers[client.id]?.length ? 'text-indigo-600 hover:bg-indigo-50' : 'text-gray-300 cursor-default'}`}
+                          title={clientUsers[client.id]?.length ? `${clientUsers[client.id].length} usuário(s)` : 'Sem usuários'}
+                          disabled={!clientUsers[client.id]?.length}
+                        >
+                          <Key className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => openEditModal(client)}
                           className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
                           title="Editar"
@@ -395,6 +487,37 @@ export default function AdminDashboard() {
                       </div>
                     </td>
                   </tr>
+                  {expandedUsers === client.id && clientUsers[client.id] && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-3 bg-indigo-50/50">
+                        <div className="text-xs font-medium text-indigo-700 mb-2">Usuários com acesso ao dashboard:</div>
+                        <div className="space-y-1">
+                          {clientUsers[client.id].map((u: any) => (
+                            <div key={u.id} className="flex items-center gap-3 py-1.5 px-3 bg-white rounded-lg border border-indigo-100">
+                              <span className="text-sm font-medium text-gray-900 flex-1">{u.name}</span>
+                              <span className="text-xs text-gray-500">{u.email}</span>
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${u.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                                {u.is_active ? 'Ativo' : 'Inativo'}
+                              </span>
+                              <button
+                                onClick={() => handleToggleUserActive(u.id, u.is_active)}
+                                className="text-xs text-blue-600 hover:underline"
+                              >
+                                {u.is_active ? 'Desativar' : 'Ativar'}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteUser(u.id)}
+                                className="text-xs text-red-600 hover:underline"
+                              >
+                                Excluir
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
                 {clients.length === 0 && (
                   <tr>
@@ -429,6 +552,86 @@ export default function AdminDashboard() {
                 className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition"
               >
                 Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create User Modal */}
+      {showUserModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+            <div className="px-6 py-4 border-b flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900">Criar Login para Cliente</h3>
+              <button onClick={() => setShowUserModal(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              <p className="text-sm text-gray-500">
+                O cliente poderá acessar o dashboard com este login e ver apenas: Dashboard, Conversas e Ligações.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+                <input
+                  type="text"
+                  value={userForm.name}
+                  onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                  placeholder="Nome do usuário"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email (login)</label>
+                <input
+                  type="email"
+                  value={userForm.email}
+                  onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                  placeholder="cliente@email.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={userForm.password}
+                    onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
+                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                    placeholder="Senha do cliente"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              {userMessage && (
+                <div className={`flex items-center gap-2 text-sm ${userMessage.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+                  {userMessage.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                  {userMessage.text}
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t flex justify-end gap-3">
+              <button
+                onClick={() => setShowUserModal(false)}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateUser}
+                disabled={userSaving}
+                className="px-6 py-2 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 transition disabled:opacity-50 flex items-center gap-2"
+              >
+                {userSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                Criar Login
               </button>
             </div>
           </div>

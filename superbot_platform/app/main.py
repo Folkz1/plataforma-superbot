@@ -17,6 +17,7 @@ from app.api.routes import (
     rag as rag_routes,
     elevenlabs as elevenlabs_routes,
     live as live_routes,
+    users as users_routes,
 )
 
 
@@ -67,6 +68,7 @@ app.include_router(config_meta_routes.router)
 app.include_router(rag_routes.router)
 app.include_router(elevenlabs_routes.router)
 app.include_router(live_routes.router)
+app.include_router(users_routes.router)
 
 
 # ==================== Health ====================
