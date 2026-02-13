@@ -29,6 +29,12 @@ export default function LoginPage() {
       localStorage.setItem('token', access_token);
       localStorage.setItem('user', JSON.stringify(user));
 
+      // Para clientes, configurar tenant automaticamente
+      if (user?.role === 'client' && user?.client_id) {
+        localStorage.setItem('active_tenant_id', user.client_id);
+        localStorage.setItem('active_tenant_name', user.client_name || '');
+      }
+
       // Redirecionar
       router.push(user?.role === 'admin' ? '/admin' : '/dash');
     } catch (err: any) {
@@ -136,17 +142,6 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
-          {/* Demo Credentials */}
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-xs text-blue-800 font-medium mb-2">
-              💡 Credenciais de Teste:
-            </p>
-            <div className="space-y-1 text-xs text-blue-700">
-              <p><strong>Usuário:</strong> admin</p>
-              <p><strong>Senha:</strong> admin123</p>
-            </div>
-          </div>
 
           {/* Footer */}
           <div className="mt-6 text-center">
