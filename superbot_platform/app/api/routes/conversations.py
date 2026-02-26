@@ -434,7 +434,24 @@ async def get_conversation(
             ConversationEvent.channel_type == state.channel_type,
             ConversationEvent.conversation_id == conversation_id
         )
-    ).order_by(ConversationEvent.created_at)
+    )
+
+    # Stable chronological ordering:
+    # - `created_at` is the primary key for timeline order.
+    # - In Postgres, `ctid` provides deterministic tie-break for rows created
+    #   in the same timestamp window (common in burst sends).
+    # - In non-Postgres environments, fallback to UUID `id`.
+    dialect_name = ""
+    try:
+        if db.bind and db.bind.dialect:
+            dialect_name = (db.bind.dialect.name or "").lower()
+    except Exception:
+        dialect_name = ""
+
+    if dialect_name == "postgresql":
+        events_query = events_query.order_by(ConversationEvent.created_at, sa_text("ctid"))
+    else:
+        events_query = events_query.order_by(ConversationEvent.created_at, ConversationEvent.id)
 
     result = await db.execute(events_query)
     events = result.scalars().all()

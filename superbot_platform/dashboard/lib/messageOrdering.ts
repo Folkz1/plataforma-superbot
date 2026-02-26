@@ -1,4 +1,5 @@
 type SortableMessage = {
+  direction?: string | null;
   created_at?: string | null;
   raw_payload?: unknown;
 };
@@ -41,13 +42,27 @@ function parseTimestamp(value: unknown): number | null {
 
 function extractMessageTimestamp(message: SortableMessage): number {
   const raw = message.raw_payload;
-  const candidates = [
+  const direction = String(message.direction || '').toLowerCase();
+
+  // Outbound/system events often carry inbound timestamps in raw_payload.
+  // Prioritize DB `created_at` so burst replies keep real send order.
+  const outboundCandidates = [
+    message.created_at,
+    readPath(raw, ['timestamp']),
+    readPath(raw, ['sent', 'timestamp']),
+    readPath(raw, ['entry', 0, 'time']),
+    readPath(raw, ['entry', 0, 'messaging', 0, 'timestamp']),
+  ];
+
+  const inboundCandidates = [
     readPath(raw, ['timestamp']),
     readPath(raw, ['sent', 'timestamp']),
     readPath(raw, ['entry', 0, 'time']),
     readPath(raw, ['entry', 0, 'messaging', 0, 'timestamp']),
     message.created_at,
   ];
+
+  const candidates = direction === 'in' ? inboundCandidates : outboundCandidates;
 
   for (const candidate of candidates) {
     const ts = parseTimestamp(candidate);
