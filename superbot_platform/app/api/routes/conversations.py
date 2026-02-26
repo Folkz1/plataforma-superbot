@@ -437,9 +437,9 @@ async def get_conversation(
     )
 
     # Stable chronological ordering:
-    # - `created_at` is the primary key for timeline order.
-    # - In Postgres, `ctid` provides deterministic tie-break for rows created
-    #   in the same timestamp window (common in burst sends).
+    # - `event_created_at` is the canonical timeline timestamp (payload-derived).
+    # - Fallback to `created_at`.
+    # - In Postgres, `ctid` gives deterministic tie-break on timestamp ties.
     # - In non-Postgres environments, fallback to UUID `id`.
     dialect_name = ""
     try:
@@ -450,9 +450,15 @@ async def get_conversation(
         dialect_name = ""
 
     if dialect_name == "postgresql":
-        events_query = events_query.order_by(ConversationEvent.created_at, sa_text("ctid"))
+        events_query = events_query.order_by(
+            sa_text("COALESCE(event_created_at, created_at)"),
+            sa_text("ctid"),
+        )
     else:
-        events_query = events_query.order_by(ConversationEvent.created_at, ConversationEvent.id)
+        events_query = events_query.order_by(
+            func.coalesce(ConversationEvent.event_created_at, ConversationEvent.created_at),
+            ConversationEvent.id,
+        )
 
     result = await db.execute(events_query)
     events = result.scalars().all()
@@ -472,7 +478,7 @@ async def get_conversation(
             "text": text,
             "media": event.media,
             "raw_payload": event.raw_payload,
-            "created_at": event.created_at
+            "created_at": event.event_created_at or event.created_at
         })
 
     return {

@@ -81,6 +81,7 @@ class ConversationEvent(Base):
     media = Column(JSON)
     raw_payload = Column(JSON)
     metadata_json = Column("metadata", JSON)
+    event_created_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
