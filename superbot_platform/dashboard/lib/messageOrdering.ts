@@ -1,5 +1,6 @@
 type SortableMessage = {
   direction?: string | null;
+  message_type?: string | null;
   created_at?: string | null;
   raw_payload?: unknown;
 };
@@ -154,7 +155,7 @@ function extractMessageTimestampMicros(message: SortableMessage): number {
 }
 
 export function sortMessagesChronologically<T extends SortableMessage>(messages: T[] = []): T[] {
-  return messages
+  const ordered = messages
     .map((message, index) => ({
       message,
       index,
@@ -166,5 +167,84 @@ export function sortMessagesChronologically<T extends SortableMessage>(messages:
       if (a.tie && b.tie && a.tie !== b.tie) return a.tie < b.tie ? -1 : 1;
       return a.index - b.index;
     })
-    .map((item) => item.message);
+
+  return ordered.map((item) => item.message);
+}
+
+function isWhatsappBurstCandidate(item: {
+  message: SortableMessage;
+  ts: number;
+}): boolean {
+  const direction = String(item.message.direction || '').toLowerCase();
+  if (direction !== 'out') return false;
+
+  const messageType = String(item.message.message_type || '').toLowerCase();
+  if (messageType === 'human_reply' || messageType === 'status_change') return false;
+
+  // Ignore invalid timestamps.
+  if (!Number.isFinite(item.ts) || item.ts <= 0) return false;
+  return true;
+}
+
+export function sortMessagesForChannel<T extends SortableMessage>(
+  messages: T[] = [],
+  channelType?: string | null
+): T[] {
+  const base = messages
+    .map((message, index) => ({
+      message,
+      index,
+      ts: extractMessageTimestampMicros(message),
+      tie: extractTiebreakId(message),
+    }))
+    .sort((a, b) => {
+      if (a.ts !== b.ts) return a.ts - b.ts;
+      if (a.tie && b.tie && a.tie !== b.tie) return a.tie < b.tie ? -1 : 1;
+      return a.index - b.index;
+    });
+
+  if (String(channelType || '').toLowerCase() !== 'whatsapp') {
+    return base.map((item) => item.message);
+  }
+
+  // WhatsApp-specific render fix:
+  // some outbound burst logs are persisted in reverse textual order while
+  // timestamps stay within the same second. Reorder only these tight bursts.
+  const fixed = [...base];
+  let cursor = 0;
+
+  while (cursor < fixed.length) {
+    const current = fixed[cursor];
+    if (!isWhatsappBurstCandidate(current)) {
+      cursor += 1;
+      continue;
+    }
+
+    const baseSecond = Math.floor(current.ts / 1_000_000);
+    let end = cursor + 1;
+
+    while (end < fixed.length) {
+      const next = fixed[end];
+      if (!isWhatsappBurstCandidate(next)) break;
+      const nextSecond = Math.floor(next.ts / 1_000_000);
+      if (nextSecond !== baseSecond) break;
+      end += 1;
+    }
+
+    const size = end - cursor;
+    if (size >= 2) {
+      const firstTs = fixed[cursor].ts;
+      const lastTs = fixed[end - 1].ts;
+      // Only flip very tight bot bursts (<= 1 second window) to avoid
+      // affecting normal sequential agent messages.
+      if (lastTs - firstTs <= 1_000_000) {
+        const reversed = fixed.slice(cursor, end).reverse();
+        fixed.splice(cursor, size, ...reversed);
+      }
+    }
+
+    cursor = end;
+  }
+
+  return fixed.map((item) => item.message);
 }

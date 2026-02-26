@@ -8,7 +8,7 @@ import {
   X, Calendar, ChevronRight
 } from 'lucide-react';
 import { getPlatformLogo } from '@/components/PlatformLogos';
-import { sortMessagesChronologically } from '@/lib/messageOrdering';
+import { sortMessagesForChannel } from '@/lib/messageOrdering';
 
 // Runtime API URL resolution (same as main app)
 let _portalApiUrl = '';
@@ -54,7 +54,7 @@ function normalizeConversation(conversation: Conversation): Conversation {
   if (!conversation?.messages?.length) return conversation;
   return {
     ...conversation,
-    messages: sortMessagesChronologically(conversation.messages),
+    messages: sortMessagesForChannel(conversation.messages, conversation.channel_type),
   };
 }
 
