@@ -11,7 +11,8 @@ function parseIsoTimestampToMicros(value: string): number | null {
   // - 2026-02-26T19:30:46Z
   // We parse manually to preserve microseconds (Date.parse truncates to ms).
   const match = value.trim().match(
-    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})?$/
+    // Accept: Z, +hh:mm, +hhmm, or no timezone (assume UTC).
+    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})?$/
   );
   if (!match) return null;
 
@@ -44,7 +45,7 @@ function parseIsoTimestampToMicros(value: string): number | null {
   if (!Number.isFinite(utcMs)) return null;
 
   if (tz !== 'Z') {
-    const tzMatch = tz.match(/^([+-])(\d{2}):(\d{2})$/);
+    const tzMatch = tz.match(/^([+-])(\d{2}):?(\d{2})$/);
     if (!tzMatch) return null;
     const sign = tzMatch[1] === '-' ? -1 : 1;
     const tzHours = Number(tzMatch[2]);
@@ -73,6 +74,33 @@ function readPath(value: unknown, path: Array<string | number>): unknown {
   }
 
   return current;
+}
+
+function extractTiebreakId(message: SortableMessage): string | null {
+  const raw = message.raw_payload;
+
+  const candidates = [
+    // WhatsApp Cloud API: response contains messages[0].id
+    readPath(raw, ['result', 'messages', 0, 'id']),
+    readPath(raw, ['messages', 0, 'id']),
+
+    // Messenger/Instagram: response contains message_id
+    readPath(raw, ['result', 'message_id']),
+    readPath(raw, ['result', 'messageId']),
+    readPath(raw, ['message_id']),
+    readPath(raw, ['messageId']),
+
+    // Generic fallbacks
+    readPath(raw, ['id']),
+    readPath(raw, ['sent', 'id']),
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return String(candidate);
+  }
+
+  return null;
 }
 
 function parseTimestampMicros(value: unknown): number | null {
@@ -131,9 +159,11 @@ export function sortMessagesChronologically<T extends SortableMessage>(messages:
       message,
       index,
       ts: extractMessageTimestampMicros(message),
+      tie: extractTiebreakId(message),
     }))
     .sort((a, b) => {
       if (a.ts !== b.ts) return a.ts - b.ts;
+      if (a.tie && b.tie && a.tie !== b.tie) return a.tie < b.tie ? -1 : 1;
       return a.index - b.index;
     })
     .map((item) => item.message);
