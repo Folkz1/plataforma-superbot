@@ -443,8 +443,9 @@ async def get_conversation(
     # - In non-Postgres environments, fallback to UUID `id`.
     dialect_name = ""
     try:
-        if db.bind and db.bind.dialect:
-            dialect_name = (db.bind.dialect.name or "").lower()
+        bind = db.get_bind()
+        if bind is not None and getattr(bind, "dialect", None) is not None:
+            dialect_name = (bind.dialect.name or "").lower()
     except Exception:
         dialect_name = ""
 
