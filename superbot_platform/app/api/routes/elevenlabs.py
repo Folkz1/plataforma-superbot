@@ -4,12 +4,12 @@ ElevenLabs Proxy API - Manage agents, tools, and prompts
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 import httpx
 import os
 
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import desc, and_
 
@@ -349,10 +349,60 @@ async def add_agent_tool(
 WEBHOOK_SECRET = os.getenv("ELEVENLABS_WEBHOOK_SECRET", "superbot-webhook-2026")
 
 
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+
+    if isinstance(value, (int, float)):
+        try:
+            # Accept both epoch seconds and milliseconds.
+            ts = value / 1000 if value > 1_000_000_000_000 else value
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (ValueError, OSError):
+            return None
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+
+        # Numeric string timestamps
+        if normalized.isdigit():
+            return _parse_datetime(int(normalized))
+
+        try:
+            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    return None
+
+
+def _parse_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class CallWebhookPayload(BaseModel):
-    agent_id: str
+    model_config = ConfigDict(extra="allow")
+
+    agent_id: Optional[str] = None
     agent_name: Optional[str] = None
-    conversation_id: str
+    conversation_id: Optional[str] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     customer_email: Optional[str] = None
@@ -364,6 +414,11 @@ class CallWebhookPayload(BaseModel):
     termination_reason: Optional[str] = None
     audio_url: Optional[str] = None
     data_collection: Optional[Dict[str, Any]] = None
+    recording_url: Optional[str] = None
+    bitrix_audio_url: Optional[str] = None
+    transcription_text: Optional[str] = None
+    transcription: Optional[str] = None
+    call_status: Optional[str] = None
     project_id: str
 
 
@@ -373,34 +428,155 @@ async def receive_call_webhook(
     db: AsyncSession = Depends(get_db),
     x_webhook_secret: Optional[str] = None
 ):
-    """Receive call data from n8n ElevenLabs workflow"""
-    from fastapi import Header
+    """Receive call data from n8n workflows (ElevenLabs/Bitrix-compatible)."""
     # Simple auth check
     # In production, use Header dependency; here we accept from body or query
+    extra = getattr(payload, "__pydantic_extra__", None) or {}
 
-    start_dt = None
-    if payload.start_time:
-        try:
-            start_dt = datetime.fromisoformat(payload.start_time.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            start_dt = datetime.now(timezone.utc)
+    start_dt = _first_non_empty(
+        _parse_datetime(payload.start_time),
+        _parse_datetime(extra.get("started_at")),
+        _parse_datetime(extra.get("start_at")),
+        _parse_datetime(extra.get("created_at")),
+        datetime.now(timezone.utc),
+    )
+
+    conversation_id = _first_non_empty(
+        payload.conversation_id,
+        extra.get("conversation_id"),
+        extra.get("call_id"),
+        extra.get("external_call_id"),
+        extra.get("id"),
+    ) or f"call-{uuid4()}"
+
+    agent_id = _first_non_empty(
+        payload.agent_id,
+        extra.get("agent_id"),
+        extra.get("bitrix_agent_id"),
+        extra.get("provider"),
+        "unknown",
+    )
+
+    duration = _first_non_empty(
+        payload.call_duration_secs,
+        extra.get("call_duration_secs"),
+        extra.get("duration"),
+        extra.get("duration_secs"),
+        extra.get("duration_seconds"),
+    )
+    call_duration_secs = _parse_int(duration)
+
+    transcript = payload.transcript
+    extra_transcript = extra.get("transcript")
+    if not transcript and isinstance(extra_transcript, list):
+        transcript = extra_transcript
+
+    transcript_text = _first_non_empty(
+        payload.transcription_text,
+        payload.transcription,
+        extra.get("transcription_text"),
+        extra.get("transcription"),
+        extra.get("transcript_text"),
+    )
+    if not transcript and isinstance(extra_transcript, str):
+        transcript_text = transcript_text or extra_transcript
+
+    if not transcript and isinstance(transcript_text, str) and transcript_text.strip():
+        transcript = [{"role": "customer", "message": transcript_text.strip()}]
+
+    transcript_summary = _first_non_empty(
+        payload.transcript_summary,
+        extra.get("transcript_summary"),
+        extra.get("summary"),
+        extra.get("call_summary"),
+    )
+
+    if not transcript_summary and transcript:
+        joined_text = " ".join(
+            str(item.get("message", "")).strip()
+            for item in transcript
+            if isinstance(item, dict) and item.get("message")
+        ).strip()
+        transcript_summary = joined_text[:500] if joined_text else None
+
+    audio_url = _first_non_empty(
+        payload.audio_url,
+        payload.recording_url,
+        payload.bitrix_audio_url,
+        extra.get("audio_url"),
+        extra.get("recording_url"),
+        extra.get("record_url"),
+        extra.get("recording_file_url"),
+    )
+
+    if isinstance(audio_url, dict):
+        audio_url = _first_non_empty(audio_url.get("url"), audio_url.get("link"))
+
+    if isinstance(audio_url, str):
+        audio_url = audio_url.strip() or None
+
+    status_hint = str(_first_non_empty(
+        payload.call_status,
+        extra.get("call_status"),
+        extra.get("status"),
+        extra.get("result"),
+        "",
+    )).lower()
+
+    call_successful = payload.call_successful
+    if status_hint in {"failed", "failure", "error", "missed", "no_answer", "cancelled", "canceled"}:
+        call_successful = False
+    elif status_hint in {"successful", "success", "completed", "complete", "ok"}:
+        call_successful = True
+
+    customer_name = _first_non_empty(
+        payload.customer_name,
+        extra.get("customer_name"),
+        extra.get("contact_name"),
+        extra.get("name"),
+    )
+
+    customer_phone = _first_non_empty(
+        payload.customer_phone,
+        extra.get("customer_phone"),
+        extra.get("phone"),
+        extra.get("phone_number"),
+        extra.get("to_number"),
+    )
+
+    customer_email = _first_non_empty(
+        payload.customer_email,
+        extra.get("customer_email"),
+        extra.get("email"),
+    )
+
+    data_collection = _first_non_empty(
+        payload.data_collection,
+        extra.get("data_collection"),
+    )
+
+    if data_collection is None and extra:
+        data_collection = {
+            "provider": _first_non_empty(extra.get("provider"), "bitrix"),
+            "raw_payload": extra,
+        }
 
     call = VoiceCallHistory(
         project_id=payload.project_id,
-        agent_id=payload.agent_id,
+        agent_id=agent_id,
         agent_name=payload.agent_name,
-        conversation_id=payload.conversation_id,
-        customer_name=payload.customer_name,
-        customer_phone=payload.customer_phone,
-        customer_email=payload.customer_email,
-        call_duration_secs=payload.call_duration_secs,
+        conversation_id=conversation_id,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        customer_email=customer_email,
+        call_duration_secs=call_duration_secs,
         start_time=start_dt or datetime.now(timezone.utc),
-        transcript_summary=payload.transcript_summary,
-        transcript=payload.transcript,
-        call_successful=payload.call_successful,
-        termination_reason=payload.termination_reason,
-        audio_url=payload.audio_url,
-        data_collection=payload.data_collection,
+        transcript_summary=transcript_summary,
+        transcript=transcript,
+        call_successful=call_successful,
+        termination_reason=_first_non_empty(payload.termination_reason, extra.get("termination_reason"), extra.get("hangup_reason")),
+        audio_url=audio_url,
+        data_collection=data_collection,
     )
     db.add(call)
     await db.commit()

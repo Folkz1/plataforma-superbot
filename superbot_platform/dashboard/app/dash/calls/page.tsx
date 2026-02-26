@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type MouseEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
 import {
   Phone, Clock, CheckCircle, XCircle, TrendingUp,
-  Play, X, User, Mail, FileText, Loader2, ChevronDown
+  Play, X, User, Mail, FileText, Loader2, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 interface CallSummary {
@@ -27,7 +27,7 @@ interface CallSummary {
 
 interface CallDetail extends CallSummary {
   transcript: Array<{ role: string; message: string; time_in_call_secs?: number }>;
-  data_collection: Record<string, any>;
+  data_collection: Record<string, unknown>;
   created_at: string;
 }
 
@@ -63,6 +63,9 @@ export default function CallsPage() {
   // Detail modal
   const [selectedCall, setSelectedCall] = useState<CallDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailCache, setDetailCache] = useState<Record<string, CallDetail>>({});
+  const [expandedCallId, setExpandedCallId] = useState<string | null>(null);
+  const [inlineLoadingCallId, setInlineLoadingCallId] = useState<string | null>(null);
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -95,15 +98,47 @@ export default function CallsPage() {
     if (tenantId) loadCalls(tenantId, days, statusFilter);
   };
 
+  const fetchCallDetail = async (callId: string): Promise<CallDetail | null> => {
+    if (detailCache[callId]) return detailCache[callId];
+
+    try {
+      const res = await api.get(`/api/elevenlabs/calls/${tenantId}/${callId}`);
+      const detail = res.data as CallDetail;
+      setDetailCache((prev) => ({ ...prev, [callId]: detail }));
+      return detail;
+    } catch (error) {
+      console.error('Erro ao carregar detalhe:', error);
+      return null;
+    }
+  };
+
   const openDetail = async (callId: string) => {
     setLoadingDetail(true);
     try {
-      const res = await api.get(`/api/elevenlabs/calls/${tenantId}/${callId}`);
-      setSelectedCall(res.data);
-    } catch (error) {
-      console.error('Erro ao carregar detalhe:', error);
+      const detail = await fetchCallDetail(callId);
+      if (detail) setSelectedCall(detail);
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const toggleInlineTranscript = async (event: MouseEvent, callId: string) => {
+    event.stopPropagation();
+
+    if (expandedCallId === callId) {
+      setExpandedCallId(null);
+      return;
+    }
+
+    setExpandedCallId(callId);
+
+    if (detailCache[callId]) return;
+
+    setInlineLoadingCallId(callId);
+    try {
+      await fetchCallDetail(callId);
+    } finally {
+      setInlineLoadingCallId(null);
     }
   };
 
@@ -230,40 +265,123 @@ export default function CallsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {calls.map((call) => (
-                  <tr key={call.id} className="hover:bg-gray-50 transition cursor-pointer" onClick={() => openDetail(call.id)}>
-                    <td className="px-5 py-3 text-sm text-gray-900">
-                      {call.start_time ? new Date(call.start_time).toLocaleString(dateLocale, {
-                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
-                      }) : '-'}
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="text-sm font-medium text-gray-900">{call.customer_name || '-'}</div>
-                      {call.customer_email && (
-                        <div className="text-xs text-gray-500">{call.customer_email}</div>
+                {calls.map((call) => {
+                  const isExpanded = expandedCallId === call.id;
+                  const inlineDetail = detailCache[call.id];
+                  const transcript = inlineDetail?.transcript || [];
+
+                  return (
+                    <Fragment key={call.id}>
+                      <tr className="hover:bg-gray-50 transition cursor-pointer" onClick={() => openDetail(call.id)}>
+                        <td className="px-5 py-3 text-sm text-gray-900">
+                          {call.start_time ? new Date(call.start_time).toLocaleString(dateLocale, {
+                            day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+                          }) : '-'}
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="text-sm font-medium text-gray-900">{call.customer_name || '-'}</div>
+                          {call.customer_email && (
+                            <div className="text-xs text-gray-500">{call.customer_email}</div>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-sm text-gray-600 font-mono">{call.customer_phone || '-'}</td>
+                        <td className="px-5 py-3 text-sm text-gray-600">{call.agent_name || '-'}</td>
+                        <td className="px-5 py-3 text-sm text-gray-900 font-medium">{formatDuration(call.call_duration_secs)}</td>
+                        <td className="px-5 py-3">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
+                            call.call_successful
+                              ? 'bg-green-50 text-green-700 border border-green-200'
+                              : 'bg-red-50 text-red-700 border border-red-200'
+                          }`}>
+                            {call.call_successful
+                              ? <><CheckCircle className="w-3 h-3" /> {t.calls_success}</>
+                              : <><XCircle className="w-3 h-3" /> {t.calls_failed}</>}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="inline-flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={(e) => toggleInlineTranscript(e, call.id)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs"
+                            >
+                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                              {t.calls_transcript}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openDetail(call.id);
+                              }}
+                              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            >
+                              {t.calls_view}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr className="bg-gray-50/80">
+                          <td colSpan={7} className="px-5 py-4">
+                            <div className="grid gap-4 lg:grid-cols-2">
+                              <div>
+                                <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                                  {t.calls_audio}
+                                </h4>
+                                {call.audio_url ? (
+                                  <audio
+                                    controls
+                                    preload="none"
+                                    className="w-full"
+                                    src={call.audio_url}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    Seu navegador nao suporta audio.
+                                  </audio>
+                                ) : (
+                                  <p className="text-sm text-gray-500">{t.calls_not_provided}</p>
+                                )}
+                              </div>
+
+                              <div>
+                                <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                                  {t.calls_transcript}
+                                </h4>
+                                {inlineLoadingCallId === call.id ? (
+                                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    Carregando...
+                                  </div>
+                                ) : transcript.length > 0 ? (
+                                  <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                    {transcript.map((entry, i) => (
+                                      <div
+                                        key={`${call.id}-inline-${i}`}
+                                        className={`p-2.5 rounded-lg text-sm ${
+                                          entry.role === 'agent'
+                                            ? 'bg-white border border-gray-200 text-gray-700'
+                                            : 'bg-blue-600 text-white'
+                                        }`}
+                                      >
+                                        <p className="text-[11px] opacity-70 font-medium mb-1">
+                                          {entry.role === 'agent' ? t.detail_agent : t.calls_client}
+                                          {entry.time_in_call_secs !== undefined && ` - ${formatDuration(entry.time_in_call_secs)}`}
+                                        </p>
+                                        <p className="whitespace-pre-wrap">{entry.message}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-gray-500">{t.calls_not_provided}</p>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                    <td className="px-5 py-3 text-sm text-gray-600 font-mono">{call.customer_phone || '-'}</td>
-                    <td className="px-5 py-3 text-sm text-gray-600">{call.agent_name || '-'}</td>
-                    <td className="px-5 py-3 text-sm text-gray-900 font-medium">{formatDuration(call.call_duration_secs)}</td>
-                    <td className="px-5 py-3">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
-                        call.call_successful
-                          ? 'bg-green-50 text-green-700 border border-green-200'
-                          : 'bg-red-50 text-red-700 border border-red-200'
-                      }`}>
-                        {call.call_successful
-                          ? <><CheckCircle className="w-3 h-3" /> {t.calls_success}</>
-                          : <><XCircle className="w-3 h-3" /> {t.calls_failed}</>}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">
-                        {t.calls_view}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -362,14 +480,19 @@ export default function CallsPage() {
                       .map(([key, val]) => {
                         // ElevenLabs format: { value: "...", json_schema: {...}, description: "..." }
                         // or nested: { data_collection_id: "phone", value: "123", ... }
+                        const valueObject = val && typeof val === 'object'
+                          ? (val as Record<string, unknown>)
+                          : null;
+
                         let displayVal: string | null = null;
-                        if (val && typeof val === 'object') {
-                          displayVal = val.value != null ? String(val.value) : null;
+                        if (valueObject) {
+                          displayVal = valueObject.value != null ? String(valueObject.value) : null;
                         } else {
                           displayVal = val != null ? String(val) : null;
                         }
                         // Use data_collection_id as label if available, otherwise key
-                        const label = (val && typeof val === 'object' && val.data_collection_id) || key;
+                        const dataCollectionId = valueObject?.data_collection_id;
+                        const label = (typeof dataCollectionId === 'string' && dataCollectionId) || key;
                         return { label, value: displayVal };
                       })
                       .filter(e => e.value && e.value !== 'null' && e.value !== '');

@@ -12,6 +12,7 @@ from app.api.routes import (
     auth as auth_routes,
     clients as clients_routes,
     conversations as conversations_routes,
+    contacts as contacts_routes,
     analytics as analytics_routes,
     config_meta as config_meta_routes,
     rag as rag_routes,
@@ -63,6 +64,7 @@ app.add_middleware(
 app.include_router(auth_routes.router)
 app.include_router(clients_routes.router)
 app.include_router(conversations_routes.router)
+app.include_router(contacts_routes.router)
 app.include_router(analytics_routes.router)
 app.include_router(config_meta_routes.router)
 app.include_router(rag_routes.router)

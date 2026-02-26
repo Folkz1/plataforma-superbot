@@ -51,6 +51,11 @@ class ChannelUpsert(BaseModel):
     )
 
 
+class AutoRegisterChannelsRequest(BaseModel):
+    days: int = Field(default=30, ge=1, le=365)
+    dry_run: bool = False
+
+
 async def _get_tenant_row(tenant_or_project_id: str, project_id: str, db: AsyncSession) -> Optional[dict[str, Any]]:
     # 1) If the path param matches a client id, use it
     row = await db.execute(
@@ -352,6 +357,140 @@ async def upsert_channel(
 
     row = res.mappings().first()
     return {"success": True, "project_id": str(project_uuid), "channel": dict(row) if row else None}
+
+
+@router.post("/channels/{tenant_or_project_id}/auto-register")
+async def auto_register_channels(
+    tenant_or_project_id: str,
+    data: AutoRegisterChannelsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Discover active sources from conversation_events and register them in channels.
+    Useful to automate onboarding when new channel identifiers start sending messages.
+    """
+    project_id = await resolve_project_id_for_user(tenant_or_project_id, current_user, db)
+    project_uuid = UUID(project_id)
+
+    detected_res = await db.execute(
+        text(
+            """
+            SELECT
+              channel_type,
+              channel_identifier,
+              MAX(created_at) AS last_event_at
+            FROM conversation_events
+            WHERE project_id = (:pid)::uuid
+              AND channel_identifier IS NOT NULL
+              AND channel_identifier <> ''
+              AND created_at >= now() - ((:days)::text || ' days')::interval
+            GROUP BY channel_type, channel_identifier
+            ORDER BY MAX(created_at) DESC
+            """
+        ),
+        {"pid": str(project_uuid), "days": data.days},
+    )
+    detected = [dict(r) for r in detected_res.mappings().all()]
+
+    existing_res = await db.execute(
+        text(
+            """
+            SELECT channel_identifier, channel_type
+            FROM channels
+            WHERE project_id = (:pid)::uuid
+            """
+        ),
+        {"pid": str(project_uuid)},
+    )
+    existing_rows = existing_res.mappings().all()
+    existing_map = {str(r["channel_identifier"]): str(r["channel_type"]) for r in existing_rows}
+
+    planned_create = 0
+    planned_update = 0
+    unchanged = 0
+    created = 0
+    updated = 0
+
+    sources: list[dict[str, Any]] = []
+
+    for src in detected:
+        channel_type = str(src.get("channel_type") or "").strip().lower()
+        channel_identifier = str(src.get("channel_identifier") or "").strip()
+        if not channel_type or not channel_identifier:
+            continue
+
+        existing_type = existing_map.get(channel_identifier)
+        if existing_type is None:
+            action = "create"
+            planned_create += 1
+        elif existing_type != channel_type:
+            action = "update"
+            planned_update += 1
+        else:
+            action = "keep"
+            unchanged += 1
+
+        if not data.dry_run and action in {"create", "update"}:
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO channels (
+                      id,
+                      project_id,
+                      channel_identifier,
+                      channel_type,
+                      created_at
+                    )
+                    VALUES (
+                      gen_random_uuid(),
+                      (:pid)::uuid,
+                      :channel_identifier,
+                      :channel_type,
+                      now()
+                    )
+                    ON CONFLICT (channel_identifier) DO UPDATE SET
+                      project_id = EXCLUDED.project_id,
+                      channel_type = EXCLUDED.channel_type
+                    """
+                ),
+                {
+                    "pid": str(project_uuid),
+                    "channel_identifier": channel_identifier,
+                    "channel_type": channel_type,
+                },
+            )
+            if action == "create":
+                created += 1
+            else:
+                updated += 1
+            existing_map[channel_identifier] = channel_type
+
+        sources.append({
+            "channel_type": channel_type,
+            "channel_identifier": channel_identifier,
+            "last_event_at": src.get("last_event_at"),
+            "action": action,
+        })
+
+    if not data.dry_run and (created > 0 or updated > 0):
+        await db.commit()
+
+    return {
+        "success": True,
+        "project_id": str(project_uuid),
+        "dry_run": data.dry_run,
+        "days": data.days,
+        "summary": {
+            "detected": len(sources),
+            "to_create": planned_create,
+            "to_update": planned_update,
+            "unchanged": unchanged,
+            "created": created,
+            "updated": updated,
+        },
+        "sources": sources,
+    }
 
 
 @router.delete("/channels/{tenant_or_project_id}/{channel_identifier}")

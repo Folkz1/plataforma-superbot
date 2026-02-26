@@ -8,6 +8,7 @@ import {
   X, Calendar, ChevronRight
 } from 'lucide-react';
 import { getPlatformLogo } from '@/components/PlatformLogos';
+import { sortMessagesChronologically } from '@/lib/messageOrdering';
 
 // Runtime API URL resolution (same as main app)
 let _portalApiUrl = '';
@@ -49,6 +50,14 @@ interface Conversation {
   messages?: Message[];
 }
 
+function normalizeConversation(conversation: Conversation): Conversation {
+  if (!conversation?.messages?.length) return conversation;
+  return {
+    ...conversation,
+    messages: sortMessagesChronologically(conversation.messages),
+  };
+}
+
 // ==================== API helpers ====================
 
 async function portalFetch(url: string, options?: RequestInit) {
@@ -86,7 +95,7 @@ export default function PortalPage() {
         loadConversations();
       } else if (data.messages) {
         setPortalType('live_view');
-        setSelectedConv(data);
+        setSelectedConv(normalizeConversation(data));
         setLoading(false);
       }
     }).catch((err) => {
@@ -117,7 +126,7 @@ export default function PortalPage() {
   const openConversation = async (conv: Conversation) => {
     try {
       const data = await portalFetch(`/api/live/${token}/conversations/${conv.conversation_id}`);
-      setSelectedConv(data);
+      setSelectedConv(normalizeConversation(data));
     } catch (err: any) {
       setError(err.message);
     }
@@ -291,7 +300,7 @@ function ConversationView({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const [conv, setConv] = useState(initial);
+  const [conv, setConv] = useState(normalizeConversation(initial));
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -309,7 +318,7 @@ function ConversationView({
     const refresh = async () => {
       try {
         const data = await portalFetch(`/api/live/${token}/conversations/${conv.conversation_id}`);
-        setConv(data);
+        setConv(normalizeConversation(data));
       } catch {}
     };
     const interval = setInterval(refresh, 3000);
@@ -332,7 +341,7 @@ function ConversationView({
       setReplyText('');
       inputRef.current?.focus();
       const data = await portalFetch(`/api/live/${token}/conversations/${conv.conversation_id}`);
-      setConv(data);
+      setConv(normalizeConversation(data));
     } catch (err: any) {
       setSendError(err.message);
     } finally {
@@ -348,7 +357,7 @@ function ConversationView({
         body: JSON.stringify({ status: newStatus, reason: 'Alterado via portal' }),
       });
       const data = await portalFetch(`/api/live/${token}/conversations/${conv.conversation_id}`);
-      setConv(data);
+      setConv(normalizeConversation(data));
     } catch (err: any) {
       setSendError(err.message);
     } finally {

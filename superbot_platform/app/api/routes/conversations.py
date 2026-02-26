@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import desc, func, and_, select, text as sa_text, update as sa_update
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -138,7 +138,8 @@ class MessageSchema(BaseModel):
     direction: str  # 'in', 'out', 'system'
     message_type: str
     text: Optional[str]
-    media: Optional[dict]
+    # Can be dict (single) or list (multiple), depending on n8n workflows.
+    media: Optional[Any]
     raw_payload: Optional[dict]
     created_at: datetime
 

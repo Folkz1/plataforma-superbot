@@ -16,9 +16,32 @@ interface Message {
   direction: string;
   message_type: string;
   text: string | null;
-  media: any;
-  raw_payload: any;
+  media: unknown;
+  raw_payload: unknown;
   created_at: string;
+}
+
+type MediaItem = {
+  type?: string;
+  url?: string;
+  download_url?: string;
+  share_url?: string;
+  path?: string;
+  original_url?: string;
+  mime_type?: string;
+  transcription?: string;
+  analysis?: string;
+};
+
+function normalizeMedia(media: unknown): MediaItem[] {
+  if (!media) return [];
+  if (Array.isArray(media)) return media.filter((m) => m && typeof m === 'object') as MediaItem[];
+  if (typeof media === 'object') return [media as MediaItem];
+  return [];
+}
+
+function getMediaUrl(item: MediaItem): string | null {
+  return (item.url || item.download_url || null) as string | null;
 }
 
 function getMessageText(msg: Message): string | null {
@@ -26,7 +49,8 @@ function getMessageText(msg: Message): string | null {
   const raw = msg.raw_payload;
   if (!raw) return null;
   try {
-    const messaging = raw.entry?.[0]?.messaging?.[0];
+    const root = raw as Record<string, any>;
+    const messaging = root.entry?.[0]?.messaging?.[0];
     const m = messaging?.message;
     if (m?.text) return m.text;
     if (m?.reply_to?.story) return '[Resposta a story]';
@@ -349,11 +373,143 @@ export default function ConversationViewerPage() {
                       </details>
                     )}
 
-                    {message.media && (
-                      <div className="mt-2 text-xs text-gray-500">
-                        Midia anexada
-                      </div>
-                    )}
+                    {(() => {
+                      const mediaItems = normalizeMedia(message.media);
+                      if (mediaItems.length === 0) return null;
+
+                      return (
+                        <div className="mt-3 space-y-2">
+                          {mediaItems.map((item, idx) => {
+                            const url = getMediaUrl(item);
+                            const type = (item.type || message.message_type || 'media').toLowerCase();
+
+                            if (!url) {
+                              return (
+                                <div key={idx} className={`text-xs ${isIncoming || isToolCall || isHuman ? 'text-gray-500' : 'text-blue-100'}`}>
+                                  Midia anexada (sem URL)
+                                </div>
+                              );
+                            }
+
+                            if (type === 'audio') {
+                              return (
+                                <div key={idx} className="space-y-2">
+                                  <audio controls preload="none" className="w-full" src={url}>
+                                    Seu navegador nao suporta audio.
+                                  </audio>
+                                  <div className="flex flex-wrap gap-2 text-xs">
+                                    <a
+                                      href={url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                    >
+                                      Abrir audio
+                                    </a>
+                                    {item.share_url && (
+                                      <a
+                                        href={item.share_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                      >
+                                        Nextcloud
+                                      </a>
+                                    )}
+                                  </div>
+                                  {item.transcription && (
+                                    <p className={`text-xs whitespace-pre-wrap ${isIncoming || isToolCall || isHuman ? 'text-gray-600' : 'text-blue-100'}`}>
+                                      <span className="font-medium">Transcricao:</span> {item.transcription}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            if (type === 'image') {
+                              return (
+                                <div key={idx} className="space-y-2">
+                                  <a href={url} target="_blank" rel="noopener noreferrer">
+                                    <img src={url} alt="Imagem anexada" className="max-h-64 rounded-lg border border-gray-200" />
+                                  </a>
+                                  <div className="flex flex-wrap gap-2 text-xs">
+                                    <a
+                                      href={url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                    >
+                                      Abrir imagem
+                                    </a>
+                                    {item.share_url && (
+                                      <a
+                                        href={item.share_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                      >
+                                        Nextcloud
+                                      </a>
+                                    )}
+                                  </div>
+                                  {item.analysis && (
+                                    <p className={`text-xs whitespace-pre-wrap ${isIncoming || isToolCall || isHuman ? 'text-gray-600' : 'text-blue-100'}`}>
+                                      <span className="font-medium">Descricao:</span> {item.analysis}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            if (type === 'video') {
+                              return (
+                                <div key={idx} className="space-y-2">
+                                  <video controls preload="metadata" className="w-full rounded-lg border border-gray-200" src={url} />
+                                  <div className="flex flex-wrap gap-2 text-xs">
+                                    <a
+                                      href={url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                    >
+                                      Abrir video
+                                    </a>
+                                    {item.share_url && (
+                                      <a
+                                        href={item.share_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                      >
+                                        Nextcloud
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div key={idx} className="space-y-1">
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`text-xs underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                >
+                                  Baixar arquivo
+                                </a>
+                                {item.mime_type && (
+                                  <p className={`text-[11px] ${isIncoming || isToolCall || isHuman ? 'text-gray-500' : 'text-blue-100'}`}>
+                                    {item.mime_type}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <div className={`text-xs text-gray-500 mt-1 ${

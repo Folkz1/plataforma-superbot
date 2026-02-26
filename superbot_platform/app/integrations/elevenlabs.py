@@ -170,7 +170,8 @@ class ElevenLabsManager:
                 "language": language
             },
             "tts": {
-                "voice_id": voice_id
+                "voice_id": voice_id,
+                "model_id": "eleven_turbo_v2_5"
             }
         }
         
@@ -186,6 +187,8 @@ class ElevenLabsManager:
                     "name": name
                 }
             )
+            if response.status_code >= 400:
+                print(f"ElevenLabs Agent Create Error: {response.text}")
             response.raise_for_status()
             data = response.json()
         
@@ -202,6 +205,41 @@ class ElevenLabsManager:
             "voice_id": voice_id
         }
     
+    async def create_workspace_tool(self, name: str, description: str, api_schema: dict, tool_type: str = "webhook") -> dict:
+        """
+        Cria uma tool no workspace (nativamente) da ElevenLabs.
+        
+        Args:
+            name: Nome da tool
+            description: Descrição da tool
+            api_schema: Schema da API (url, method, request_body_schema)
+            tool_type: Tipo da tool (client, webhook, etc)
+        
+        Returns:
+            dict com tool_id e detalhes da tool recém-criada
+        """
+        tool_config = {
+            "type": tool_type,
+            "name": name,
+            "description": description,
+            "api_schema": api_schema
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.base_url}/convai/tools",
+                headers={
+                    "xi-api-key": self.api_key,
+                    "Content-Type": "application/json"
+                },
+                json={"tool_config": tool_config}
+            )
+            if response.status_code >= 400:
+                print(f"ElevenLabs Tool Create Error: {response.text}")
+            response.raise_for_status()
+            
+        return response.json()
+
     async def add_agent_tool(self, agent_id: str, tool_config: dict) -> dict:
         """
         Adiciona uma tool/webhook a um agente.

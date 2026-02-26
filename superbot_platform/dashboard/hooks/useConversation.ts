@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { sortMessagesChronologically } from '@/lib/messageOrdering';
 
 interface Message {
   id: string;
@@ -50,12 +51,13 @@ export function useConversation(
     try {
       const response = await api.get(`/api/conversations/${projectId}/${conversationId}`);
       const data = response.data;
+      const orderedMessages = sortMessagesChronologically<Message>((data.messages || []) as Message[]);
 
       setConversation(data);
-      setMessages(data.messages || []);
+      setMessages(orderedMessages);
 
-      if (data.messages.length > lastMessageCountRef.current) {
-        lastMessageCountRef.current = data.messages.length;
+      if (orderedMessages.length > lastMessageCountRef.current) {
+        lastMessageCountRef.current = orderedMessages.length;
       }
 
       setError(null);

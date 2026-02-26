@@ -4,16 +4,62 @@ import axios, { AxiosRequestConfig } from 'axios';
 let _apiUrl = '';
 let _resolved = false;
 let _fetchPromise: Promise<string> | null = null;
+let _refreshPromise: Promise<string | null> | null = null;
 
 function getApiUrl(): Promise<string> {
   if (_resolved) return Promise.resolve(_apiUrl);
   if (!_fetchPromise) {
     _fetchPromise = fetch('/api/config')
       .then((r) => r.json())
-      .then((d) => { _apiUrl = d.apiUrl || ''; _resolved = true; return _apiUrl; })
+      .then((d) => { _apiUrl = String(d.apiUrl || '').replace(/\/+$/, ''); _resolved = true; return _apiUrl; })
       .catch(() => { _apiUrl = ''; _resolved = true; return ''; });
   }
   return _fetchPromise;
+}
+
+function clearAuthStorage() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('active_tenant_id');
+  localStorage.removeItem('active_tenant_name');
+}
+
+async function refreshToken(): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  const token = localStorage.getItem('token');
+  if (!token) return null;
+
+  if (!_refreshPromise) {
+    _refreshPromise = (async () => {
+      const baseUrl = await getApiUrl();
+      const fullUrl = `${baseUrl}/api/auth/refresh`;
+      try {
+        const res = await axios.post(
+          fullUrl,
+          {},
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+        const next = String(res?.data?.access_token || '').trim();
+        if (next) {
+          localStorage.setItem('token', next);
+          return next;
+        }
+      } catch (_) {
+        // ignore
+      }
+      return null;
+    })().finally(() => {
+      _refreshPromise = null;
+    });
+  }
+
+  return _refreshPromise;
 }
 
 // Create a proxy-like api object that resolves the URL before each call
@@ -27,12 +73,31 @@ function makeRequest(method: string) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
 
-    // axios.get/delete signature: (url, config)
-    // axios.post/put/patch signature: (url, data, config)
-    if (method === 'get' || method === 'delete') {
-      return axios[method as 'get'](fullUrl, { headers, ...dataOrConfig });
+    const isAuthRoute = url.startsWith('/api/auth/');
+
+    const doRequest = (reqHeaders: Record<string, string>) => {
+      // axios.get/delete signature: (url, config)
+      // axios.post/put/patch signature: (url, data, config)
+      if (method === 'get' || method === 'delete') {
+        return axios[method as 'get'](fullUrl, { ...(dataOrConfig || {}), headers: reqHeaders });
+      }
+      return (axios as any)[method](fullUrl, dataOrConfig, { ...(config || {}), headers: reqHeaders });
+    };
+
+    try {
+      return await doRequest(headers);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 401 && !isAuthRoute) {
+        const nextToken = await refreshToken();
+        if (nextToken) {
+          return await doRequest({ ...headers, Authorization: `Bearer ${nextToken}` });
+        }
+        clearAuthStorage();
+        if (typeof window !== 'undefined') window.location.href = '/login';
+      }
+      throw err;
     }
-    return (axios as any)[method](fullUrl, dataOrConfig, { headers, ...config });
   };
 }
 
@@ -67,6 +132,11 @@ export const conversationsAPI = {
   get: (projectId: string, conversationId: string) =>
     api.get(`/api/conversations/${projectId}/${conversationId}`),
   stats: (params?: any) => api.get('/api/conversations/stats', { params }),
+};
+
+// Contacts API
+export const contactsAPI = {
+  list: (params?: any) => api.get('/api/contacts', { params }),
 };
 
 // Analytics API

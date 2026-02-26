@@ -3,23 +3,32 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
-  BarChart3, MessageCircle, Bot, Phone, BookOpen, Settings,
-  LogOut, Menu, ArrowLeftRight, X, Globe
+  BarChart3, MessageCircle, Users, Bot, Phone, BookOpen, Settings,
+  LogOut, Menu, ArrowLeftRight, X, Globe, Moon, Sun
 } from 'lucide-react';
 import { useTranslation, LOCALE_LABELS, type Locale } from '@/lib/i18n';
+import { useTheme } from '@/hooks/useTheme';
 
 export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const { t, locale, setLocale } = useTranslation();
+  const { isDark, toggleTheme } = useTheme();
   const [user, setUser] = useState<any>(null);
   const [tenantName, setTenantName] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
 
+  const themeLabel = locale === 'en'
+    ? (isDark ? 'Light mode' : 'Dark mode')
+    : locale === 'es'
+      ? (isDark ? 'Modo claro' : 'Modo oscuro')
+      : (isDark ? 'Modo claro' : 'Modo escuro');
+
   const navItems = [
     { label: t.nav_dashboard, href: '/dash', icon: <BarChart3 className="w-5 h-5" /> },
     { label: t.nav_conversations, href: '/dash/conversations', icon: <MessageCircle className="w-5 h-5" /> },
+    { label: t.nav_contacts, href: '/dash/contacts', icon: <Users className="w-5 h-5" /> },
     { label: t.nav_calls, href: '/dash/calls', icon: <Phone className="w-5 h-5" /> },
     { label: t.nav_agents, href: '/dash/agents', icon: <Bot className="w-5 h-5" />, adminOnly: true },
     { label: t.nav_rag, href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
@@ -91,6 +100,14 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-gray-800 p-4 space-y-2">
+        <button
+          onClick={toggleTheme}
+          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition"
+          title={themeLabel}
+        >
+          {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          {themeLabel}
+        </button>
         {user?.role === 'admin' && (
           <button
             onClick={handleSwitchClient}
