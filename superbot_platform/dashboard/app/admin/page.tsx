@@ -664,7 +664,7 @@ export default function AdminDashboard() {
                       : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                   }`}
                 >
-                  {tab === 'geral' ? 'Geral' : tab === 'meta' ? 'Meta/Facebook' : tab === 'elevenlabs' ? 'ElevenLabs' : 'Settings'}
+                  {tab === 'geral' ? 'Geral' : tab === 'meta' ? 'Meta/Facebook' : tab === 'elevenlabs' ? 'Voz' : 'Settings'}
                 </button>
               ))}
             </div>
@@ -770,10 +770,10 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* ElevenLabs Tab */}
+              {/* Voz Tab */}
               {activeTab === 'elevenlabs' && (
                 <div className="space-y-4">
-                  <p className="text-xs text-gray-500 mb-2">Configuracao do agente de voz ElevenLabs</p>
+                  <p className="text-xs text-gray-500 mb-2">Configuração do agente de voz</p>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Agent ID</label>
                     <input type="text" value={modalData.elevenlabs_agent_id}

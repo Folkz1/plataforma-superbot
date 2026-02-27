@@ -15,6 +15,7 @@ const pt = {
   nav_conversations: 'Conversas',
   nav_contacts: 'Contatos',
   nav_calls: 'Ligações',
+  nav_pipeline: 'Pipeline',
   nav_agents: 'Agentes de Voz',
   nav_rag: 'Base de Conhecimento',
   nav_config: 'Configurações',
@@ -148,6 +149,11 @@ const pt = {
   calls_transcript: 'Transcrição',
   calls_not_provided: 'Não fornecido',
 
+  // Pipeline
+  pipeline_title: 'Pipeline',
+  pipeline_subtitle: 'Acompanhe o estágio atual das conversas (S.N.I.P.E.R.)',
+  pipeline_search: 'Buscar por nome, ID ou mensagem...',
+
   // Admin
   admin_title: 'Painel Administrativo',
   admin_subtitle: 'Gerenciamento de clientes e configurações',
@@ -206,7 +212,7 @@ const pt = {
 
   // Agents
   agents_title: 'Agentes de Voz',
-  agents_subtitle: 'Gerencie seus agentes ElevenLabs',
+  agents_subtitle: 'Gerencie seus agentes de voz',
   agents_no_agents: 'Nenhum agente configurado',
 
   // Common
@@ -228,6 +234,7 @@ const en: TranslationKeys = {
   nav_conversations: 'Conversations',
   nav_contacts: 'Contacts',
   nav_calls: 'Calls',
+  nav_pipeline: 'Pipeline',
   nav_agents: 'Voice Agents',
   nav_rag: 'Knowledge Base',
   nav_config: 'Settings',
@@ -354,6 +361,10 @@ const en: TranslationKeys = {
   calls_transcript: 'Transcript',
   calls_not_provided: 'Not provided',
 
+  pipeline_title: 'Pipeline',
+  pipeline_subtitle: 'Track current conversation stage (S.N.I.P.E.R.)',
+  pipeline_search: 'Search by name, ID, or message...',
+
   admin_title: 'Admin Panel',
   admin_subtitle: 'Client management and settings',
   admin_new_client: 'New Client',
@@ -407,7 +418,7 @@ const en: TranslationKeys = {
   config_status_desc: 'View the current state of active connections',
 
   agents_title: 'Voice Agents',
-  agents_subtitle: 'Manage your ElevenLabs agents',
+  agents_subtitle: 'Manage your voice agents',
   agents_no_agents: 'No agents configured',
 
   common_loading: 'Loading...',
@@ -428,6 +439,7 @@ const es: TranslationKeys = {
   nav_conversations: 'Conversaciones',
   nav_contacts: 'Contactos',
   nav_calls: 'Llamadas',
+  nav_pipeline: 'Pipeline',
   nav_agents: 'Agentes de Voz',
   nav_rag: 'Base de Conocimiento',
   nav_config: 'Configuración',
@@ -554,6 +566,10 @@ const es: TranslationKeys = {
   calls_transcript: 'Transcripción',
   calls_not_provided: 'No proporcionado',
 
+  pipeline_title: 'Pipeline',
+  pipeline_subtitle: 'Acompanhe la etapa actual de las conversaciones (S.N.I.P.E.R.)',
+  pipeline_search: 'Buscar por nombre, ID o mensaje...',
+
   admin_title: 'Panel Administrativo',
   admin_subtitle: 'Gestión de clientes y configuraciones',
   admin_new_client: 'Nuevo Cliente',
@@ -607,7 +623,7 @@ const es: TranslationKeys = {
   config_status_desc: 'Vea el estado actual de las conexiones activas',
 
   agents_title: 'Agentes de Voz',
-  agents_subtitle: 'Administre sus agentes ElevenLabs',
+  agents_subtitle: 'Administre sus agentes de voz',
   agents_no_agents: 'Ningún agente configurado',
 
   common_loading: 'Cargando...',

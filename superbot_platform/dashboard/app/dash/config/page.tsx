@@ -97,8 +97,8 @@ export default function ConfigIndexPage() {
       textColor: 'text-blue-600',
     },
     {
-      title: 'ElevenLabs Agents',
-      description: 'Manage voice agents',
+      title: t.nav_agents,
+      description: t.agents_subtitle,
       icon: Users,
       href: '/dash/agents',
       bgColor: 'bg-pink-100',

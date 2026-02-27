@@ -33,7 +33,7 @@ interface Voice {
   category: string;
 }
 
-export default function ElevenLabsAgentsPage() {
+export default function VoiceAgentsPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
@@ -183,7 +183,7 @@ export default function ElevenLabsAgentsPage() {
     <div className="p-6 lg:p-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Agentes de Voz</h1>
-        <p className="text-sm text-gray-500 mt-1">ElevenLabs - Gerenciar agentes</p>
+        <p className="text-sm text-gray-500 mt-1">Gerenciar agentes de voz</p>
       </div>
 
       <div>

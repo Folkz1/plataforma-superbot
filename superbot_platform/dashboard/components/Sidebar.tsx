@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
-  BarChart3, MessageCircle, Users, Bot, Phone, BookOpen, Settings,
+  BarChart3, MessageCircle, Users, Bot, Phone, BookOpen, Settings, GitBranch,
   LogOut, Menu, ArrowLeftRight, X, Globe, Moon, Sun
 } from 'lucide-react';
 import { useTranslation, LOCALE_LABELS, type Locale } from '@/lib/i18n';
@@ -30,6 +30,7 @@ export default function Sidebar() {
     { label: t.nav_conversations, href: '/dash/conversations', icon: <MessageCircle className="w-5 h-5" /> },
     { label: t.nav_contacts, href: '/dash/contacts', icon: <Users className="w-5 h-5" /> },
     { label: t.nav_calls, href: '/dash/calls', icon: <Phone className="w-5 h-5" /> },
+    { label: t.nav_pipeline, href: '/dash/pipeline', icon: <GitBranch className="w-5 h-5" />, adminOnly: true },
     { label: t.nav_agents, href: '/dash/agents', icon: <Bot className="w-5 h-5" />, adminOnly: true },
     { label: t.nav_rag, href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
     { label: t.nav_config, href: '/dash/config', icon: <Settings className="w-5 h-5" />, adminOnly: true },
