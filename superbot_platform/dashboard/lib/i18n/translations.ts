@@ -117,7 +117,7 @@ const pt = {
 
   // Calls
   calls_title: 'Histórico de Ligações',
-  calls_subtitle: 'Ligações realizadas pelos agentes de voz ElevenLabs',
+  calls_subtitle: 'Ligações realizadas pelos agentes de voz',
   calls_total: 'Total',
   calls_avg_duration: 'Duração média',
   calls_success_rate: 'Taxa de sucesso',
@@ -323,7 +323,7 @@ const en: TranslationKeys = {
   detail_media: 'Media attached',
 
   calls_title: 'Call History',
-  calls_subtitle: 'Calls made by ElevenLabs voice agents',
+  calls_subtitle: 'Calls made by voice agents',
   calls_total: 'Total',
   calls_avg_duration: 'Avg Duration',
   calls_success_rate: 'Success Rate',
@@ -523,7 +523,7 @@ const es: TranslationKeys = {
   detail_media: 'Media adjunta',
 
   calls_title: 'Historial de Llamadas',
-  calls_subtitle: 'Llamadas realizadas por agentes de voz ElevenLabs',
+  calls_subtitle: 'Llamadas realizadas por agentes de voz',
   calls_total: 'Total',
   calls_avg_duration: 'Duración promedio',
   calls_success_rate: 'Tasa de éxito',

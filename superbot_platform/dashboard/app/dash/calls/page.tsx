@@ -475,10 +475,10 @@ export default function CallsPage() {
 
                   {/* Data Collection */}
                   {selectedCall.data_collection && Object.keys(selectedCall.data_collection).length > 0 && (() => {
-                    // Extract only meaningful values from ElevenLabs data_collection
+                    // Extract only meaningful values from call data_collection
                     const entries = Object.entries(selectedCall.data_collection)
                       .map(([key, val]) => {
-                        // ElevenLabs format: { value: "...", json_schema: {...}, description: "..." }
+                        // Expected format: { value: "...", json_schema: {...}, description: "..." }
                         // or nested: { data_collection_id: "phone", value: "123", ... }
                         const valueObject = val && typeof val === 'object'
                           ? (val as Record<string, unknown>)
