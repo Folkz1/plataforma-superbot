@@ -3,25 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { AlertCircle, CheckCircle, Loader2, Plus, Save, ToggleLeft, ToggleRight, Trash2, Volume2 } from 'lucide-react';
-
-type FollowupTemplate = {
-  id: string;
-  name: string;
-  message: string;
-  delay_hours: number;
-  channel: 'whatsapp' | 'all';
-};
-
-type StageMode = 'template' | 'session';
+import { AlertCircle, CheckCircle, Loader2, Plus, RotateCcw, Save, ToggleLeft, ToggleRight, Trash2, Volume2 } from 'lucide-react';
 
 type FollowupStageCfg = {
   stage?: number;
   after_hours?: number;
-  mode?: StageMode | string;
+  mode?: 'template' | string;
   template_name?: string;
   language_code?: string;
-  text?: string;
   components?: unknown;
   [k: string]: unknown;
 };
@@ -51,10 +40,6 @@ type AiCfg = {
 };
 
 type FollowupConfig = {
-  templates?: FollowupTemplate[];
-  auto_followup?: boolean;
-  default_delay_hours?: number;
-  max_followups?: number;
   channels?: {
     whatsapp?: {
       ai_reengagement?: AiCfg;
@@ -81,8 +66,6 @@ type AiForm = {
   sendFromHour: number;
   sendUntilHour: number;
   audioEnabled: boolean;
-  audioFirstFollowupOnly: boolean;
-  audioSendTextAfterAudio: boolean;
   audioVoiceId: string;
   audioModelId: string;
   audioStability: number;
@@ -93,12 +76,12 @@ type StageForm = {
   id: string;
   stage: number;
   afterHours: number;
-  mode: StageMode;
   templateName: string;
   languageCode: string;
-  text: string;
   componentsText: string;
 };
+
+type ActiveTab = 'within_24h' | 'after_24h';
 
 const DEFAULT_AI: AiForm = {
   enabled: true,
@@ -106,15 +89,13 @@ const DEFAULT_AI: AiForm = {
   model: 'openai/gpt-4o-mini',
   timezone: 'America/Sao_Paulo',
   inactiveAfterMinutes: 180,
-  minGapMinutes: 240,
-  maxAttempts: 2,
+  minGapMinutes: 120,
+  maxAttempts: 10,
   historyLimit: 30,
   batchLimit: 50,
   sendFromHour: 8,
   sendUntilHour: 19,
   audioEnabled: true,
-  audioFirstFollowupOnly: true,
-  audioSendTextAfterAudio: true,
   audioVoiceId: 'r2fkFV8WAqXq2AqBpgJT',
   audioModelId: 'eleven_multilingual_v2',
   audioStability: 0.45,
@@ -124,19 +105,40 @@ const DEFAULT_AI: AiForm = {
 const DEFAULT_STAGE: Omit<StageForm, 'id'> = {
   stage: 1,
   afterHours: 24,
-  mode: 'template',
   templateName: '',
   languageCode: 'pt_BR',
-  text: '',
   componentsText: '[]',
 };
+
+const DEFAULT_PROMPT_CUSTOM = [
+  'Use a analise da conversa para decidir o follow-up DENTRO da janela de 24h do WhatsApp.',
+  '',
+  'Contexto recebido:',
+  '- status da conversa',
+  '- ultima mensagem inbound/outbound',
+  '- historico recente (history)',
+  '- metadata.ai_reengagement.whatsapp.count',
+  '',
+  'Objetivo:',
+  '- Reengajar com mensagem curta, util e personalizada ao contexto real.',
+  '',
+  'Regras comerciais e de conteudo:',
+  '- Nao inventar precos, horarios ou procedimentos.',
+  '- Sem emojis.',
+  '- Mensagem curta (preferencia <= 40 palavras) e terminar com pergunta.',
+  '- Se for 2a+ tentativa, variar argumento e nao repetir o ultimo texto do agente.',
+  '- Se for 1a tentativa e should_send=true, prefira enviar audio + texto.',
+  '',
+  'Tom de voz:',
+  '- Profissional, humano, objetivo e acolhedor.',
+].join('\n');
 
 const OUTPUT_SCHEMA = `{
   "should_send": true|false,
   "send_audio": true|false,
   "audio_text": "texto curto para o audio (opcional)",
-  "message": "texto curto em pt-BR, pode ter blocos separados por linha em branco",
-  "reason": "1 frase curta",
+  "message": "texto curto em pt-BR. Pode ter blocos separados por linha em branco",
+  "reason": "1 frase curta do motivo",
   "next_wait_minutes": 120
 }`;
 
@@ -165,17 +167,12 @@ function genId(): string {
   return `${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
 }
 
-function normalizeStageMode(value: unknown): StageMode {
-  return String(value || '').toLowerCase() === 'session' ? 'session' : 'template';
-}
-
 function parseStagesFromConfig(rawStages: unknown): StageForm[] {
   if (!Array.isArray(rawStages)) return [];
 
   return rawStages.map((raw, index) => {
     const st = (raw || {}) as FollowupStageCfg;
     const components = st.components;
-
     let componentsText = '[]';
     if (components !== undefined) {
       try {
@@ -189,10 +186,8 @@ function parseStagesFromConfig(rawStages: unknown): StageForm[] {
       id: genId(),
       stage: clampInt(n(st.stage, index + 1), 1, 99),
       afterHours: Math.max(0, clampInt(n(st.after_hours, 24), 0, 24 * 30)),
-      mode: normalizeStageMode(st.mode),
       templateName: String(st.template_name || '').trim(),
       languageCode: String(st.language_code || 'pt_BR').trim() || 'pt_BR',
-      text: String(st.text || '').trim(),
       componentsText,
     };
   });
@@ -200,46 +195,45 @@ function parseStagesFromConfig(rawStages: unknown): StageForm[] {
 
 function buildStagesForSave(stages: StageForm[]): FollowupStageCfg[] {
   return stages.map((item) => {
-    const templateName = item.templateName.trim();
     const languageCode = item.languageCode.trim() || 'pt_BR';
-    const text = item.text.trim();
-    const result: FollowupStageCfg = {
+    return {
       stage: clampInt(item.stage, 1, 99),
       after_hours: Math.max(0, clampInt(item.afterHours, 0, 24 * 30)),
-      mode: item.mode,
+      mode: 'template',
+      template_name: item.templateName.trim(),
       language_code: languageCode,
+      components: item.componentsText.trim() ? JSON.parse(item.componentsText) : [],
     };
-
-    if (templateName) result.template_name = templateName;
-    if (text) result.text = text;
-    if (item.componentsText.trim()) {
-      result.components = JSON.parse(item.componentsText);
-    } else {
-      result.components = [];
-    }
-
-    return result;
   });
 }
 
 function buildPrompt(custom: string): string {
   return [
-    'Voce e um motor de reengajamento para WhatsApp (janela oficial de 24h).',
+    'Voce e um motor de reengajamento para WhatsApp na janela oficial de 24h (session).',
+    'IMPORTANTE: este prompt e APENAS para follow-up ate 24h, baseado na analise da conversa.',
     '',
-    'Objetivo: decidir se vale enviar follow-up e em qual formato.',
+    'Voce recebera JSON com:',
+    '- project_slug',
+    '- conversation_id',
+    '- status',
+    '- last_event_at, last_in_at',
+    '- last_text',
+    '- history (role/user-agent, content, created_at, message_type)',
+    '- metadata (inclusive ai_reengagement.whatsapp.count)',
+    '',
+    'Objetivo: decidir se deve enviar follow-up e em qual formato (texto e/ou audio).',
     '',
     'Responda APENAS JSON valido (sem markdown):',
     OUTPUT_SCHEMA,
     '',
-    'Regras fixas:',
+    'Regras fixas (nao alteraveis):',
     '- Se o usuario pediu para parar, should_send=false.',
     '- Se contexto insuficiente, should_send=false.',
-    '- Se count=0 e should_send=true, prefira send_audio=true com audio_text + message.',
     '- Se send_audio=true e audio_text vazio, usar a primeira frase da message.',
-    '- Quando should_send=true, manter next_wait_minutes=120.',
+    '- next_wait_minutes deve ficar em 120 quando should_send=true.',
     '',
     CUSTOM_START,
-    custom.trim() || '(sem instrucoes personalizadas)',
+    custom.trim() || DEFAULT_PROMPT_CUSTOM,
     CUSTOM_END,
   ].join('\n');
 }
@@ -248,8 +242,7 @@ function extractCustom(prompt: string): string | null {
   const s = prompt.indexOf(CUSTOM_START);
   const e = prompt.indexOf(CUSTOM_END);
   if (s === -1 || e === -1 || e <= s) return null;
-  const value = prompt.slice(s + CUSTOM_START.length, e).trim();
-  return value === '(sem instrucoes personalizadas)' ? '' : value;
+  return prompt.slice(s + CUSTOM_START.length, e).trim();
 }
 
 export default function FollowupConfigPage() {
@@ -257,13 +250,14 @@ export default function FollowupConfigPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tenantId, setTenantId] = useState('');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('within_24h');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [enabled, setEnabled] = useState(false);
   const [baseConfig, setBaseConfig] = useState<FollowupConfig>({});
   const [ai, setAi] = useState<AiForm>(DEFAULT_AI);
   const [stages, setStages] = useState<StageForm[]>([]);
-  const [promptCustom, setPromptCustom] = useState('');
+  const [promptCustom, setPromptCustom] = useState(DEFAULT_PROMPT_CUSTOM);
   const [legacyPrompt, setLegacyPrompt] = useState(false);
 
   const promptPreview = useMemo(() => buildPrompt(promptCustom), [promptCustom]);
@@ -289,9 +283,9 @@ export default function FollowupConfigPage() {
       const res = await api.get(`/api/config/meta/${tId}`);
       const secrets = (res.data?.secrets || {}) as { followup_enabled?: boolean; followup_config?: FollowupConfig };
       const cfg = (secrets.followup_config || {}) as FollowupConfig;
-      const wa = (cfg.channels?.whatsapp || {}) as { ai_reengagement?: AiCfg; dry_run?: boolean };
+      const wa = (cfg.channels?.whatsapp || {}) as { ai_reengagement?: AiCfg; dry_run?: boolean; stages?: unknown };
       const aiCfg = (wa.ai_reengagement || {}) as AiCfg;
-      const loadedStages = parseStagesFromConfig((wa as { stages?: unknown }).stages);
+      const loadedStages = parseStagesFromConfig(wa.stages);
 
       setEnabled(Boolean(secrets.followup_enabled));
       setBaseConfig(cfg);
@@ -309,8 +303,6 @@ export default function FollowupConfigPage() {
         sendFromHour: clampInt(n(aiCfg.send_from_hour, DEFAULT_AI.sendFromHour), 0, 23),
         sendUntilHour: clampInt(n(aiCfg.send_until_hour, DEFAULT_AI.sendUntilHour), 0, 23),
         audioEnabled: aiCfg.audio_enabled !== false,
-        audioFirstFollowupOnly: aiCfg.audio_first_followup_only !== false,
-        audioSendTextAfterAudio: aiCfg.audio_send_text_after_audio !== false,
         audioVoiceId: String(aiCfg.audio_voice_id || DEFAULT_AI.audioVoiceId),
         audioModelId: String(aiCfg.audio_model_id || DEFAULT_AI.audioModelId),
         audioStability: clampFloat(n(aiCfg.audio_stability, DEFAULT_AI.audioStability), 0, 1, DEFAULT_AI.audioStability),
@@ -319,17 +311,21 @@ export default function FollowupConfigPage() {
 
       const custom = typeof aiCfg.prompt_custom === 'string' ? aiCfg.prompt_custom.trim() : '';
       const raw = typeof aiCfg.prompt === 'string' ? aiCfg.prompt.trim() : '';
+
       if (custom) {
         setPromptCustom(custom);
         setLegacyPrompt(false);
       } else {
         const extracted = raw ? extractCustom(raw) : null;
         if (extracted !== null) {
-          setPromptCustom(extracted);
+          setPromptCustom(extracted || DEFAULT_PROMPT_CUSTOM);
           setLegacyPrompt(false);
-        } else {
+        } else if (raw) {
           setPromptCustom(raw);
           setLegacyPrompt(Boolean(raw) && raw.includes('Responda APENAS JSON valido'));
+        } else {
+          setPromptCustom(DEFAULT_PROMPT_CUSTOM);
+          setLegacyPrompt(false);
         }
       }
     } catch {
@@ -346,22 +342,26 @@ export default function FollowupConfigPage() {
     try {
       for (const stageItem of stages) {
         const stageLabel = `stage ${stageItem.stage}`;
-        if (stageItem.mode === 'template' && !stageItem.templateName.trim()) {
-          throw new Error(`${stageLabel}: template_name é obrigatório em modo template.`);
+        if (!stageItem.templateName.trim()) {
+          throw new Error(`${stageLabel}: template_name e obrigatorio.`);
         }
-        if (!stageItem.componentsText.trim()) {
-          continue;
-        }
+
+        let componentsParsed: unknown;
         try {
-          JSON.parse(stageItem.componentsText);
+          componentsParsed = stageItem.componentsText.trim() ? JSON.parse(stageItem.componentsText) : [];
         } catch {
-          throw new Error(`${stageLabel}: components deve ser JSON válido.`);
+          throw new Error(`${stageLabel}: components deve ser JSON valido.`);
+        }
+
+        if (!Array.isArray(componentsParsed)) {
+          throw new Error(`${stageLabel}: components deve ser um array JSON.`);
         }
       }
 
       const nextCfg = JSON.parse(JSON.stringify(baseConfig || {})) as FollowupConfig;
       if (!nextCfg.channels) nextCfg.channels = {};
       const nextWa = (nextCfg.channels.whatsapp || {}) as Record<string, unknown>;
+
       nextWa.enabled = enabled;
       nextWa.dry_run = ai.dryRun;
       nextWa.stages = buildStagesForSave(stages);
@@ -379,15 +379,16 @@ export default function FollowupConfigPage() {
         send_from_hour: clampInt(ai.sendFromHour, 0, 23),
         send_until_hour: clampInt(ai.sendUntilHour, 0, 23),
         audio_enabled: ai.audioEnabled,
-        audio_first_followup_only: ai.audioFirstFollowupOnly,
-        audio_send_text_after_audio: ai.audioSendTextAfterAudio,
+        audio_first_followup_only: false,
+        audio_send_text_after_audio: true,
         audio_voice_id: ai.audioVoiceId.trim() || DEFAULT_AI.audioVoiceId,
         audio_model_id: ai.audioModelId.trim() || DEFAULT_AI.audioModelId,
         audio_stability: clampFloat(ai.audioStability, 0, 1, DEFAULT_AI.audioStability),
         audio_similarity_boost: clampFloat(ai.audioSimilarityBoost, 0, 1, DEFAULT_AI.audioSimilarityBoost),
-        prompt_custom: promptCustom.trim(),
-        prompt: buildPrompt(promptCustom),
+        prompt_custom: promptCustom.trim() || DEFAULT_PROMPT_CUSTOM,
+        prompt: buildPrompt(promptCustom || DEFAULT_PROMPT_CUSTOM),
       };
+
       nextCfg.channels.whatsapp = nextWa as NonNullable<FollowupConfig['channels']>['whatsapp'];
 
       await api.patch(`/api/config/meta/${tenantId}`, {
@@ -440,14 +441,14 @@ export default function FollowupConfigPage() {
     <div className="p-6 lg:p-8 max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Follow-up</h1>
-        <p className="text-sm text-gray-500 mt-1">Configuracao avancada do AI reengagement.</p>
+        <p className="text-sm text-gray-500 mt-1">Configuracao profissional do follow-up do WhatsApp.</p>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Follow-up Automatico</h2>
-            <p className="text-sm text-gray-500 mt-1">Liga/desliga disparo automatico.</p>
+            <p className="text-sm text-gray-500 mt-1">Liga/desliga disparos automaticos do follow-up.</p>
           </div>
           <button onClick={() => setEnabled(!enabled)} className="flex items-center gap-2">
             {enabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
@@ -458,172 +459,248 @@ export default function FollowupConfigPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Parametros da IA</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <label className="text-sm text-gray-700">Modelo<input value={ai.model} onChange={(e) => setAi({ ...ai, model: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Timezone<input value={ai.timezone} onChange={(e) => setAi({ ...ai, timezone: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Inicio (0-23)<input type="number" min={0} max={23} value={ai.sendFromHour} onChange={(e) => setAi({ ...ai, sendFromHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Fim (0-23)<input type="number" min={0} max={23} value={ai.sendUntilHour} onChange={(e) => setAi({ ...ai, sendUntilHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Inatividade (min)<input type="number" min={10} value={ai.inactiveAfterMinutes} onChange={(e) => setAi({ ...ai, inactiveAfterMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Gap (min)<input type="number" min={10} value={ai.minGapMinutes} onChange={(e) => setAi({ ...ai, minGapMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Max tentativas<input type="number" min={1} max={30} value={ai.maxAttempts} onChange={(e) => setAi({ ...ai, maxAttempts: clampInt(Number(e.target.value), 1, 30) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">History limite<input type="number" min={10} max={60} value={ai.historyLimit} onChange={(e) => setAi({ ...ai, historyLimit: clampInt(Number(e.target.value), 10, 60) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Batch limite<input type="number" min={1} max={200} value={ai.batchLimit} onChange={(e) => setAi({ ...ai, batchLimit: clampInt(Number(e.target.value), 1, 200) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Dry run
-            <button onClick={() => setAi({ ...ai, dryRun: !ai.dryRun })} className="mt-1 flex items-center gap-2">
-              {ai.dryRun ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
-            </button>
-          </label>
-          <label className="text-sm text-gray-700">IA habilitada
-            <button onClick={() => setAi({ ...ai, enabled: !ai.enabled })} className="mt-1 flex items-center gap-2">
-              {ai.enabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
-            </button>
-          </label>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Volume2 className="w-5 h-5 text-indigo-600" />
-          <h2 className="text-lg font-semibold text-gray-900">Audio</h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <label className="text-sm text-gray-700">Audio habilitado<button onClick={() => setAi({ ...ai, audioEnabled: !ai.audioEnabled })} className="mt-1 flex items-center">{ai.audioEnabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}</button></label>
-          <label className="text-sm text-gray-700">Apenas 1o follow-up<button onClick={() => setAi({ ...ai, audioFirstFollowupOnly: !ai.audioFirstFollowupOnly })} className="mt-1 flex items-center">{ai.audioFirstFollowupOnly ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}</button></label>
-          <label className="text-sm text-gray-700">Texto apos audio<button onClick={() => setAi({ ...ai, audioSendTextAfterAudio: !ai.audioSendTextAfterAudio })} className="mt-1 flex items-center">{ai.audioSendTextAfterAudio ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}</button></label>
-          <label className="text-sm text-gray-700">Voice ID<input value={ai.audioVoiceId} onChange={(e) => setAi({ ...ai, audioVoiceId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Audio model<input value={ai.audioModelId} onChange={(e) => setAi({ ...ai, audioModelId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Stability<input type="number" min={0} max={1} step={0.01} value={ai.audioStability} onChange={(e) => setAi({ ...ai, audioStability: clampFloat(Number(e.target.value), 0, 1, 0.45) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-          <label className="text-sm text-gray-700">Similarity<input type="number" min={0} max={1} step={0.01} value={ai.audioSimilarityBoost} onChange={(e) => setAi({ ...ai, audioSimilarityBoost: clampFloat(Number(e.target.value), 0, 1, 0.7) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Stages (24h+)</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Configure os disparos por estágio fora da janela de 24h (template) ou em sessão.
-            </p>
-          </div>
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-2 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <button
-            onClick={addStage}
-            className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+            onClick={() => setActiveTab('within_24h')}
+            className={`rounded-lg px-4 py-3 text-sm font-medium transition ${
+              activeTab === 'within_24h' ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+            }`}
           >
-            <Plus className="w-4 h-4" />
-            Adicionar stage
+            Ate 24h (IA Reengagement)
+          </button>
+          <button
+            onClick={() => setActiveTab('after_24h')}
+            className={`rounded-lg px-4 py-3 text-sm font-medium transition ${
+              activeTab === 'after_24h' ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            Apos 24h (Templates Meta)
           </button>
         </div>
+      </div>
 
-        {stages.length === 0 ? (
-          <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded-lg p-4">
-            Nenhum stage configurado. Adicione ao menos um stage para templates pós-24h.
+      {activeTab === 'within_24h' && (
+        <>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Parametros da IA (janela ate 24h)</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Esta aba decide follow-ups de sessao (ate 24h), com base na analise do historico da conversa.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <label className="text-sm text-gray-700">
+                Modelo
+                <input value={ai.model} onChange={(e) => setAi({ ...ai, model: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Timezone
+                <input value={ai.timezone} onChange={(e) => setAi({ ...ai, timezone: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Inicio (0-23)
+                <input type="number" min={0} max={23} value={ai.sendFromHour} onChange={(e) => setAi({ ...ai, sendFromHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Fim (0-23)
+                <input type="number" min={0} max={23} value={ai.sendUntilHour} onChange={(e) => setAi({ ...ai, sendUntilHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Inatividade (min)
+                <input type="number" min={10} value={ai.inactiveAfterMinutes} onChange={(e) => setAi({ ...ai, inactiveAfterMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Gap minimo (min)
+                <input type="number" min={10} value={ai.minGapMinutes} onChange={(e) => setAi({ ...ai, minGapMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Max tentativas
+                <input type="number" min={1} max={30} value={ai.maxAttempts} onChange={(e) => setAi({ ...ai, maxAttempts: clampInt(Number(e.target.value), 1, 30) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                History limite
+                <input type="number" min={10} max={60} value={ai.historyLimit} onChange={(e) => setAi({ ...ai, historyLimit: clampInt(Number(e.target.value), 10, 60) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Batch limite
+                <input type="number" min={1} max={200} value={ai.batchLimit} onChange={(e) => setAi({ ...ai, batchLimit: clampInt(Number(e.target.value), 1, 200) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Dry run
+                <button onClick={() => setAi({ ...ai, dryRun: !ai.dryRun })} className="mt-1 flex items-center">
+                  {ai.dryRun ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
+                </button>
+              </label>
+              <label className="text-sm text-gray-700">
+                IA habilitada
+                <button onClick={() => setAi({ ...ai, enabled: !ai.enabled })} className="mt-1 flex items-center">
+                  {ai.enabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
+                </button>
+              </label>
+            </div>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {stages.map((stage) => (
-              <div key={stage.id} className="border border-gray-200 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-medium text-gray-900">Stage {stage.stage}</h3>
-                  <button
-                    onClick={() => removeStage(stage.id)}
-                    className="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Remover
-                  </button>
-                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <label className="text-sm text-gray-700">
-                    Stage
-                    <input
-                      type="number"
-                      min={1}
-                      max={99}
-                      value={stage.stage}
-                      onChange={(e) => updateStage(stage.id, { stage: clampInt(Number(e.target.value), 1, 99) })}
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
-                    />
-                  </label>
-                  <label className="text-sm text-gray-700">
-                    After hours
-                    <input
-                      type="number"
-                      min={0}
-                      max={720}
-                      value={stage.afterHours}
-                      onChange={(e) => updateStage(stage.id, { afterHours: Math.max(0, clampInt(Number(e.target.value), 0, 720)) })}
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
-                    />
-                  </label>
-                  <label className="text-sm text-gray-700">
-                    Mode
-                    <select
-                      value={stage.mode}
-                      onChange={(e) => updateStage(stage.id, { mode: normalizeStageMode(e.target.value) })}
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
-                    >
-                      <option value="template">template</option>
-                      <option value="session">session</option>
-                    </select>
-                  </label>
-                  <label className="text-sm text-gray-700">
-                    Language code
-                    <input
-                      value={stage.languageCode}
-                      onChange={(e) => updateStage(stage.id, { languageCode: e.target.value })}
-                      placeholder="pt_BR"
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
-                    />
-                  </label>
-                  <label className="text-sm text-gray-700 md:col-span-2">
-                    Template name
-                    <input
-                      value={stage.templateName}
-                      onChange={(e) => updateStage(stage.id, { templateName: e.target.value })}
-                      placeholder="followup_24h"
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
-                    />
-                  </label>
-                  <label className="text-sm text-gray-700 md:col-span-2">
-                    Texto (modo session)
-                    <input
-                      value={stage.text}
-                      onChange={(e) => updateStage(stage.id, { text: e.target.value })}
-                      placeholder="Mensagem opcional para session"
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
-                    />
-                  </label>
-                  <label className="text-sm text-gray-700 md:col-span-4">
-                    Components (JSON)
-                    <textarea
-                      value={stage.componentsText}
-                      onChange={(e) => updateStage(stage.id, { componentsText: e.target.value })}
-                      rows={3}
-                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white font-mono text-xs"
-                      placeholder='[]'
-                    />
-                  </label>
-                </div>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Volume2 className="w-5 h-5 text-indigo-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Audio (sessao ate 24h)</h2>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Um unico controle: habilitado/desabilitado. Com audio habilitado, a IA pode decidir enviar audio em qualquer tentativa.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <label className="text-sm text-gray-700">
+                Audio habilitado
+                <button onClick={() => setAi({ ...ai, audioEnabled: !ai.audioEnabled })} className="mt-1 flex items-center">
+                  {ai.audioEnabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
+                </button>
+              </label>
+              <label className="text-sm text-gray-700">
+                Voice ID
+                <input value={ai.audioVoiceId} onChange={(e) => setAi({ ...ai, audioVoiceId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Audio model
+                <input value={ai.audioModelId} onChange={(e) => setAi({ ...ai, audioModelId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700">
+                Stability
+                <input type="number" min={0} max={1} step={0.01} value={ai.audioStability} onChange={(e) => setAi({ ...ai, audioStability: clampFloat(Number(e.target.value), 0, 1, 0.45) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+              <label className="text-sm text-gray-700 md:col-span-2">
+                Similarity
+                <input type="number" min={0} max={1} step={0.01} value={ai.audioSimilarityBoost} onChange={(e) => setAi({ ...ai, audioSimilarityBoost: clampFloat(Number(e.target.value), 0, 1, 0.7) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Prompt do reengajamento ate 24h</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Este prompt e usado apenas no reengajamento dentro da janela de 24h, analisando o contexto e o historico da conversa.
+                </p>
               </div>
-            ))}
+              <button onClick={() => setPromptCustom(DEFAULT_PROMPT_CUSTOM)} className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
+                <RotateCcw className="w-4 h-4" />
+                Restaurar padrao
+              </button>
+            </div>
+            {legacyPrompt && (
+              <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
+                Prompt legado detectado. Ao salvar, ele sera padronizado para o formato atual.
+              </div>
+            )}
+            <textarea value={promptCustom} onChange={(e) => setPromptCustom(e.target.value)} rows={12} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900" placeholder="Instrucoes comerciais e de estilo para reengajamento ate 24h..." />
+            <p className="text-xs text-gray-500 mt-2">
+              O schema de saida da IA e fixo internamente e nao e editavel nesta tela.
+            </p>
+            <details className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
+              <summary className="cursor-pointer text-sm font-medium text-gray-700">Ver prompt final gerado</summary>
+              <pre className="mt-3 text-xs whitespace-pre-wrap text-gray-800">{promptPreview}</pre>
+            </details>
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-2">Prompt (schema fixo)</h2>
-        <p className="text-sm text-gray-500 mb-3">Personalize so as instrucoes. O formato JSON de resposta permanece fixo.</p>
-        {legacyPrompt && <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">Prompt legado detectado. Ao salvar, ele sera padronizado.</div>}
-        <textarea value={promptCustom} onChange={(e) => setPromptCustom(e.target.value)} rows={7} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900" placeholder="Instrucoes comerciais e estilo de escrita..." />
-        <pre className="mt-3 text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto text-gray-800">{OUTPUT_SCHEMA}</pre>
-        <details className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
-          <summary className="cursor-pointer text-sm font-medium text-gray-700">Ver prompt final</summary>
-          <pre className="mt-3 text-xs whitespace-pre-wrap text-gray-800">{promptPreview}</pre>
-        </details>
-      </div>
+      {activeTab === 'after_24h' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Follow-up apos 24h (Template Meta WhatsApp)</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Esta aba configura apenas disparos por template aprovado no Meta WhatsApp (fora da janela de 24h).
+              </p>
+            </div>
+            <button onClick={addStage} className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
+              <Plus className="w-4 h-4" />
+              Adicionar stage
+            </button>
+          </div>
+
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-800">
+            Cada stage representa um disparo em horas apos o ultimo evento elegivel. O campo <strong>template_name</strong> deve ser exatamente o nome aprovado no Meta.
+          </div>
+          <div className="mb-6 p-3 bg-gray-50 border border-gray-200 rounded text-xs text-gray-700">
+            <div className="font-medium mb-1">Como preencher components (JSON)</div>
+            <div>Sem variaveis: <code>[]</code></div>
+            <div>Com 1 variavel no body: <code>{'[{"type":"body","parameters":[{"type":"text","text":"Joao"}]}]'}</code></div>
+          </div>
+
+          {stages.length === 0 ? (
+            <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded-lg p-4">
+              Nenhum stage configurado. Adicione ao menos um stage de template.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {stages.map((stage) => (
+                <div key={stage.id} className="border border-gray-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-medium text-gray-900">Stage {stage.stage}</h3>
+                    <button onClick={() => removeStage(stage.id)} className="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700">
+                      <Trash2 className="w-4 h-4" />
+                      Remover
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <label className="text-sm text-gray-700">
+                      Stage
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={stage.stage}
+                        onChange={(e) => updateStage(stage.id, { stage: clampInt(Number(e.target.value), 1, 99) })}
+                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-700">
+                      After hours
+                      <input
+                        type="number"
+                        min={0}
+                        max={720}
+                        value={stage.afterHours}
+                        onChange={(e) => updateStage(stage.id, { afterHours: Math.max(0, clampInt(Number(e.target.value), 0, 720)) })}
+                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-700 md:col-span-2">
+                      Template name (Meta)
+                      <input
+                        value={stage.templateName}
+                        onChange={(e) => updateStage(stage.id, { templateName: e.target.value })}
+                        placeholder="followup_24h"
+                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-700 md:col-span-2">
+                      Language code
+                      <input
+                        value={stage.languageCode}
+                        onChange={(e) => updateStage(stage.id, { languageCode: e.target.value })}
+                        placeholder="pt_BR"
+                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-700 md:col-span-4">
+                      Components (JSON array)
+                      <textarea
+                        value={stage.componentsText}
+                        onChange={(e) => updateStage(stage.id, { componentsText: e.target.value })}
+                        rows={4}
+                        className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white font-mono text-xs"
+                        placeholder='[]'
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <div>
