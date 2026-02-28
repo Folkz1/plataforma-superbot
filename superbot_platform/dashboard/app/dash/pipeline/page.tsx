@@ -276,7 +276,9 @@ export default function PipelinePage() {
                     items.map((conv) => (
                       <button
                         key={`${conv.project_id}-${conv.channel_type}-${conv.conversation_id}`}
-                        onClick={() => router.push(`/dash/conversations/${conv.project_id}/${conv.conversation_id}`)}
+                        onClick={() => router.push(
+                          `/dash/conversations/${encodeURIComponent(conv.project_id)}/${encodeURIComponent(conv.conversation_id)}?channel_type=${encodeURIComponent(conv.channel_type)}`
+                        )}
                         className="w-full text-left bg-white border border-gray-100 rounded-xl p-4 hover:border-blue-200 hover:shadow-sm transition-all"
                       >
                         <div className="flex items-start gap-3">

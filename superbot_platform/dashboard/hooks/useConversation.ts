@@ -33,6 +33,7 @@ interface UseConversationOptions {
 export function useConversation(
   projectId: string,
   conversationId: string,
+  channelType?: string,
   options: UseConversationOptions = {}
 ) {
   const { enabled = true, pollInterval = 5000 } = options;
@@ -46,10 +47,14 @@ export function useConversation(
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastMessageCountRef = useRef(0);
+  const requestParams = channelType ? { channel_type: channelType } : undefined;
 
   const fetchConversation = async () => {
     try {
-      const response = await api.get(`/api/conversations/${projectId}/${conversationId}`);
+      const response = await api.get(
+        `/api/conversations/${projectId}/${conversationId}`,
+        { params: requestParams }
+      );
       const data = response.data;
       const orderedMessages = sortMessagesForChannel<Message>(
         (data.messages || []) as Message[],
@@ -75,7 +80,7 @@ export function useConversation(
     if (enabled && projectId && conversationId) {
       fetchConversation();
     }
-  }, [projectId, conversationId, enabled]);
+  }, [projectId, conversationId, channelType, enabled]);
 
   useEffect(() => {
     if (!enabled || !projectId || !conversationId) return;
@@ -92,7 +97,7 @@ export function useConversation(
         setIsPolling(false);
       }
     };
-  }, [projectId, conversationId, enabled, pollInterval]);
+  }, [projectId, conversationId, channelType, enabled, pollInterval]);
 
   const refresh = () => {
     fetchConversation();
@@ -103,7 +108,8 @@ export function useConversation(
     try {
       const resp = await api.post(
         `/api/conversations/${projectId}/${conversationId}/send`,
-        { text }
+        { text },
+        { params: requestParams }
       );
       await fetchConversation();
       return resp.data;
@@ -112,20 +118,21 @@ export function useConversation(
     } finally {
       setSending(false);
     }
-  }, [projectId, conversationId]);
+  }, [projectId, conversationId, channelType]);
 
   const updateStatus = useCallback(async (status: string, reason?: string) => {
     try {
       const resp = await api.patch(
         `/api/conversations/${projectId}/${conversationId}/status`,
-        { status, reason }
+        { status, reason },
+        { params: requestParams }
       );
       await fetchConversation();
       return resp.data;
     } catch (err: any) {
       throw new Error(err.response?.data?.detail || 'Erro ao atualizar status');
     }
-  }, [projectId, conversationId]);
+  }, [projectId, conversationId, channelType]);
 
   return {
     conversation,

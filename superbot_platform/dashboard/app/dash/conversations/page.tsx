@@ -66,9 +66,13 @@ export default function ConversationsPage() {
       await api.patch(`/api/conversations/${conv.project_id}/${conv.conversation_id}/status`, {
         status: newStatus,
         reason: newStatus === 'handoff' ? 'Transferido para humano via lista' : 'Devolvido ao bot via lista'
+      }, {
+        params: { channel_type: conv.channel_type }
       });
       setConversations(prev => prev.map(c =>
-        c.conversation_id === conv.conversation_id ? { ...c, status: newStatus } : c
+        c.project_id === conv.project_id && c.channel_type === conv.channel_type && c.conversation_id === conv.conversation_id
+          ? { ...c, status: newStatus }
+          : c
       ));
     } catch (err) {
       console.error('Erro ao mudar status:', err);
@@ -159,7 +163,9 @@ export default function ConversationsPage() {
           {filtered.map((conv) => (
             <div
               key={`${conv.project_id}-${conv.channel_type}-${conv.conversation_id}`}
-              onClick={() => router.push(`/dash/conversations/${conv.project_id}/${conv.conversation_id}`)}
+              onClick={() => router.push(
+                `/dash/conversations/${encodeURIComponent(conv.project_id)}/${encodeURIComponent(conv.conversation_id)}?channel_type=${encodeURIComponent(conv.channel_type)}`
+              )}
               className="bg-white border border-gray-100 rounded-xl p-4 hover:border-blue-200 hover:shadow-sm cursor-pointer transition-all"
             >
               <div className="flex items-start gap-3">

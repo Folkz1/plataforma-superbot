@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { useConversation } from '@/hooks/useConversation';
 import {
   ArrowLeft, MessageCircle, User, Bot, Wrench,
@@ -35,13 +35,27 @@ type MediaItem = {
 
 function normalizeMedia(media: unknown): MediaItem[] {
   if (!media) return [];
-  if (Array.isArray(media)) return media.filter((m) => m && typeof m === 'object') as MediaItem[];
-  if (typeof media === 'object') return [media as MediaItem];
-  return [];
+  const items = Array.isArray(media)
+    ? (media.filter((m) => m && typeof m === 'object') as MediaItem[])
+    : (typeof media === 'object' ? [media as MediaItem] : []);
+
+  return items.filter((item) => {
+    const type = String(item.type || '').toLowerCase();
+    const hasUrl = Boolean(item.url || item.download_url || item.share_url || item.original_url);
+    const hasUsefulText = Boolean(item.transcription || item.analysis);
+    if (hasUrl) return true;
+    if (type === 'audio' && hasUsefulText) return true;
+    if (type === 'image' && hasUsefulText) return true;
+    return false;
+  });
 }
 
 function getMediaUrl(item: MediaItem): string | null {
-  return (item.url || item.download_url || null) as string | null;
+  return (item.url || item.download_url || item.share_url || item.original_url || null) as string | null;
+}
+
+function hasMediaUrl(item: MediaItem): boolean {
+  return Boolean(item.url || item.download_url || item.share_url || item.original_url);
 }
 
 function getMessageText(msg: Message): string | null {
@@ -66,6 +80,7 @@ function getMessageText(msg: Message): string | null {
 export default function ConversationViewerPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -76,12 +91,15 @@ export default function ConversationViewerPage() {
   const [shareLink, setShareLink] = useState('');
   const [copied, setCopied] = useState(false);
 
+  const selectedChannelType = searchParams.get('channel_type') || undefined;
+
   const {
     conversation, messages, loading, error, isPolling, sending,
     refresh, sendMessage, updateStatus
   } = useConversation(
     params.project_id as string,
     params.conversation_id as string,
+    selectedChannelType,
     { pollInterval: 5000 }
   );
 
@@ -383,29 +401,25 @@ export default function ConversationViewerPage() {
                             const url = getMediaUrl(item);
                             const type = (item.type || message.message_type || 'media').toLowerCase();
 
-                            if (!url) {
-                              return (
-                                <div key={idx} className={`text-xs ${isIncoming || isToolCall || isHuman ? 'text-gray-500' : 'text-blue-100'}`}>
-                                  Midia anexada (sem URL)
-                                </div>
-                              );
-                            }
-
                             if (type === 'audio') {
                               return (
                                 <div key={idx} className="space-y-2">
-                                  <audio controls preload="none" className="w-full" src={url}>
-                                    Seu navegador nao suporta audio.
-                                  </audio>
+                                  {hasMediaUrl(item) && url && (
+                                    <audio controls preload="none" className="w-full" src={url}>
+                                      Seu navegador nao suporta audio.
+                                    </audio>
+                                  )}
                                   <div className="flex flex-wrap gap-2 text-xs">
-                                    <a
-                                      href={url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
-                                    >
-                                      Abrir audio
-                                    </a>
+                                    {hasMediaUrl(item) && url && (
+                                      <a
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
+                                      >
+                                        Abrir audio
+                                      </a>
+                                    )}
                                     {item.share_url && (
                                       <a
                                         href={item.share_url}
@@ -427,6 +441,7 @@ export default function ConversationViewerPage() {
                             }
 
                             if (type === 'image') {
+                              if (!url) return null;
                               return (
                                 <div key={idx} className="space-y-2">
                                   <a href={url} target="_blank" rel="noopener noreferrer">
@@ -462,6 +477,7 @@ export default function ConversationViewerPage() {
                             }
 
                             if (type === 'video') {
+                              if (!url) return null;
                               return (
                                 <div key={idx} className="space-y-2">
                                   <video controls preload="metadata" className="w-full rounded-lg border border-gray-200" src={url} />
@@ -488,6 +504,8 @@ export default function ConversationViewerPage() {
                                 </div>
                               );
                             }
+
+                            if (!url) return null;
 
                             return (
                               <div key={idx} className="space-y-1">

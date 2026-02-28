@@ -387,6 +387,7 @@ async def list_conversations(
 async def get_conversation(
     project_id: str,
     conversation_id: str,
+    channel_type: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
@@ -394,15 +395,21 @@ async def get_conversation(
     resolved_project_id = await resolve_project_id_for_user(project_id, current_user, db)
     project_uuid = UUID(resolved_project_id)
 
-    # Get conversation state
-    query = select(ConversationState).where(
-        and_(
-            ConversationState.project_id == project_uuid,
-            ConversationState.conversation_id == conversation_id
-        )
+    filters = [
+        ConversationState.project_id == project_uuid,
+        ConversationState.conversation_id == conversation_id,
+    ]
+    if channel_type:
+        filters.append(ConversationState.channel_type == channel_type)
+
+    result = await db.execute(
+        select(ConversationState)
+        .where(and_(*filters))
+        .order_by(desc(ConversationState.last_event_at))
+        .limit(2)
     )
-    result = await db.execute(query)
-    state = result.scalar_one_or_none()
+    rows = result.scalars().all()
+    state = rows[0] if rows else None
 
     if not state:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
@@ -508,20 +515,30 @@ class SendMessageRequest(BaseModel):
 
 
 async def _get_conversation_state(
-    project_id: str, conversation_id: str, current_user: DashboardUser, db: AsyncSession
+    project_id: str,
+    conversation_id: str,
+    current_user: DashboardUser,
+    db: AsyncSession,
+    channel_type: Optional[str] = None,
 ) -> tuple[UUID, ConversationState]:
     """Resolve project and get conversation state."""
     resolved = await resolve_project_id_for_user(project_id, current_user, db)
     project_uuid = UUID(resolved)
+    filters = [
+        ConversationState.project_id == project_uuid,
+        ConversationState.conversation_id == conversation_id,
+    ]
+    if channel_type:
+        filters.append(ConversationState.channel_type == channel_type)
+
     result = await db.execute(
-        select(ConversationState).where(
-            and_(
-                ConversationState.project_id == project_uuid,
-                ConversationState.conversation_id == conversation_id
-            )
-        )
+        select(ConversationState)
+        .where(and_(*filters))
+        .order_by(desc(ConversationState.last_event_at))
+        .limit(2)
     )
-    state = result.scalar_one_or_none()
+    rows = result.scalars().all()
+    state = rows[0] if rows else None
     if not state:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
     return project_uuid, state
@@ -532,12 +549,13 @@ async def update_conversation_status(
     project_id: str,
     conversation_id: str,
     body: StatusUpdateRequest,
+    channel_type: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
     """Update conversation status (handoff/open/closed)."""
     project_uuid, state = await _get_conversation_state(
-        project_id, conversation_id, current_user, db
+        project_id, conversation_id, current_user, db, channel_type
     )
 
     now = datetime.now(timezone.utc)
@@ -591,12 +609,13 @@ async def send_human_message(
     project_id: str,
     conversation_id: str,
     body: SendMessageRequest,
+    channel_type: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
     """Send a message from the dashboard as a human agent via Meta API."""
     project_uuid, state = await _get_conversation_state(
-        project_id, conversation_id, current_user, db
+        project_id, conversation_id, current_user, db, channel_type
     )
 
     # Get channel credentials
