@@ -131,6 +131,28 @@ def format_contact_display(conversation_id: str, channel_type: str, contact_name
     return conversation_id
 
 
+def _is_meta_echo_event(event: ConversationEvent) -> bool:
+    """
+    Detect Meta echo webhooks (bot's own sent message mirrored back by Meta).
+    These should not be rendered as user-visible messages in conversation history.
+    """
+    if event.channel_type not in ("instagram", "messenger"):
+        return False
+
+    raw = event.raw_payload if isinstance(event.raw_payload, dict) else {}
+    meta = event.metadata_json if isinstance(event.metadata_json, dict) else {}
+
+    raw_echo = (
+        raw.get("entry", [{}])[0]
+        .get("messaging", [{}])[0]
+        .get("message", {})
+        .get("is_echo")
+    )
+    meta_echo = meta.get("is_echo")
+
+    return str(raw_echo).lower() == "true" or str(meta_echo).lower() == "true"
+
+
 # ==================== Schemas ====================
 
 class MessageSchema(BaseModel):
@@ -474,6 +496,10 @@ async def get_conversation(
     # Filter out events with no content (read receipts, delivery receipts)
     messages = []
     for event in events:
+        # Ignore Meta echo reflections to avoid duplicated outbound messages in UI.
+        if _is_meta_echo_event(event):
+            continue
+
         text = extract_text_from_raw(event.raw_payload, event.text)
         # Skip events with no text and no media (read/delivery receipts)
         if text is None and not event.media and event.direction == "in" and event.message_type in ("unknown", ""):

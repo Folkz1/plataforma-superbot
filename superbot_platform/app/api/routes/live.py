@@ -23,6 +23,7 @@ from app.api.routes.auth import get_current_user
 from app.api.routes.conversations import (
     extract_text_from_raw, extract_contact_name_from_raw,
     format_contact_display, _resolve_contact_names, _get_last_text_fallback,
+    _is_meta_echo_event,
     MessageSchema, ConversationListItem
 )
 
@@ -268,6 +269,10 @@ async def portal_get_conversation(
 
     messages = []
     for e in events:
+        # Skip Meta echo reflections to avoid duplicated outbound messages.
+        if _is_meta_echo_event(e):
+            continue
+
         text = extract_text_from_raw(e.raw_payload, e.text)
         if text is None and e.direction == "in" and e.message_type in ("unknown", ""):
             continue
