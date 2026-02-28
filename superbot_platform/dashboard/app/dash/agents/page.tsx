@@ -136,9 +136,9 @@ export default function VoiceAgentsPage() {
         api.get(`/api/elevenlabs/active-agents/${clientId}`),
       ]);
 
-      const rawAgents = Array.isArray(agentsRes.data?.agents) ? agentsRes.data.agents : [];
-      const rawVoices = Array.isArray(voicesRes.data?.voices) ? voicesRes.data.voices : [];
-      const rawLinks = Array.isArray(activeRes.data?.agents) ? activeRes.data.agents : [];
+      const rawAgents: unknown[] = Array.isArray(agentsRes.data?.agents) ? agentsRes.data.agents as unknown[] : [];
+      const rawVoices: unknown[] = Array.isArray(voicesRes.data?.voices) ? voicesRes.data.voices as unknown[] : [];
+      const rawLinks: unknown[] = Array.isArray(activeRes.data?.agents) ? activeRes.data.agents as unknown[] : [];
 
       setAgents(
         rawAgents.filter((a: unknown): a is Agent =>
@@ -153,7 +153,7 @@ export default function VoiceAgentsPage() {
       setActiveLinks(
         rawLinks
           .filter((l: unknown): l is JsonObject => isObject(l) && typeof l.agent_id === 'string')
-          .map((l) => ({
+          .map((l: JsonObject): ActiveAgentLink => ({
             id: typeof l.id === 'string' ? l.id : null,
             agent_id: String(l.agent_id),
             label: typeof l.label === 'string' ? l.label : null,
