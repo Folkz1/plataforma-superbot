@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState, type MouseEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
@@ -22,7 +22,7 @@ interface CallSummary {
   call_successful: boolean;
   termination_reason: string;
   transcript_summary: string;
-  audio_url: string;
+  audio_url?: string | null;
 }
 
 interface CallDetail extends CallSummary {
@@ -66,6 +66,9 @@ export default function CallsPage() {
   const [detailCache, setDetailCache] = useState<Record<string, CallDetail>>({});
   const [expandedCallId, setExpandedCallId] = useState<string | null>(null);
   const [inlineLoadingCallId, setInlineLoadingCallId] = useState<string | null>(null);
+  const [audioBlobUrls, setAudioBlobUrls] = useState<Record<string, string>>({});
+  const [audioLoadingByCallId, setAudioLoadingByCallId] = useState<Record<string, boolean>>({});
+  const audioBlobUrlsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -76,8 +79,65 @@ export default function CallsPage() {
       : parsedUser.client_id;
     if (!tId) { router.push(parsedUser.role === 'admin' ? '/admin' : '/login'); return; }
     setTenantId(tId);
-    loadCalls(tId, days, statusFilter);
+    loadCalls(tId, 30, '');
   }, [router]);
+
+  useEffect(() => {
+    audioBlobUrlsRef.current = audioBlobUrls;
+  }, [audioBlobUrls]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(audioBlobUrlsRef.current).forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // noop
+        }
+      });
+    };
+  }, []);
+
+  const needsProtectedAudioFetch = (url?: string | null) => {
+    if (!url) return true;
+    return /api\.elevenlabs\.io/i.test(url);
+  };
+
+  const resolveAudioUrl = (callId: string, rawAudioUrl?: string | null) => {
+    if (rawAudioUrl && !needsProtectedAudioFetch(rawAudioUrl)) return rawAudioUrl;
+    return audioBlobUrls[callId] || '';
+  };
+
+  const ensureAudioLoaded = async (callId: string, rawAudioUrl?: string | null) => {
+    if (!tenantId) return;
+    if (rawAudioUrl && !needsProtectedAudioFetch(rawAudioUrl)) return;
+    if (audioBlobUrls[callId] || audioLoadingByCallId[callId]) return;
+
+    setAudioLoadingByCallId((prev) => ({ ...prev, [callId]: true }));
+    try {
+      const res = await api.get(
+        `/api/elevenlabs/calls/${tenantId}/${callId}/audio`,
+        { responseType: 'blob' },
+      );
+      const blob = res.data as Blob;
+      const blobUrl = URL.createObjectURL(blob);
+      setAudioBlobUrls((prev) => {
+        const current = prev[callId];
+        if (current && current !== blobUrl) {
+          try { URL.revokeObjectURL(current); } catch { /* noop */ }
+        }
+        return { ...prev, [callId]: blobUrl };
+      });
+    } catch (error) {
+      console.error('Erro ao carregar audio da ligacao:', error);
+    } finally {
+      setAudioLoadingByCallId((prev) => {
+        const next = { ...prev };
+        delete next[callId];
+        return next;
+      });
+    }
+  };
 
   const loadCalls = async (tId: string, d: number, status: string) => {
     setLoading(true);
@@ -116,13 +176,16 @@ export default function CallsPage() {
     setLoadingDetail(true);
     try {
       const detail = await fetchCallDetail(callId);
-      if (detail) setSelectedCall(detail);
+      if (detail) {
+        setSelectedCall(detail);
+        await ensureAudioLoaded(detail.id, detail.audio_url);
+      }
     } finally {
       setLoadingDetail(false);
     }
   };
 
-  const toggleInlineTranscript = async (event: MouseEvent, callId: string) => {
+  const toggleInlineTranscript = async (event: MouseEvent, callId: string, rawAudioUrl?: string | null) => {
     event.stopPropagation();
 
     if (expandedCallId === callId) {
@@ -132,15 +195,22 @@ export default function CallsPage() {
 
     setExpandedCallId(callId);
 
-    if (detailCache[callId]) return;
+    if (detailCache[callId]) {
+      await ensureAudioLoaded(callId, rawAudioUrl);
+      return;
+    }
 
     setInlineLoadingCallId(callId);
     try {
       await fetchCallDetail(callId);
+      await ensureAudioLoaded(callId, rawAudioUrl);
     } finally {
       setInlineLoadingCallId(null);
     }
   };
+
+  const modalAudioSrc = selectedCall ? resolveAudioUrl(selectedCall.id, selectedCall.audio_url) : '';
+  const modalAudioLoading = selectedCall ? Boolean(audioLoadingByCallId[selectedCall.id]) : false;
 
   return (
     <div className="p-6 lg:p-8">
@@ -269,6 +339,8 @@ export default function CallsPage() {
                   const isExpanded = expandedCallId === call.id;
                   const inlineDetail = detailCache[call.id];
                   const transcript = inlineDetail?.transcript || [];
+                  const inlineAudioSrc = resolveAudioUrl(call.id, call.audio_url);
+                  const inlineAudioLoading = Boolean(audioLoadingByCallId[call.id]);
 
                   return (
                     <Fragment key={call.id}>
@@ -301,7 +373,7 @@ export default function CallsPage() {
                         <td className="px-5 py-3 text-right">
                           <div className="inline-flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                             <button
-                              onClick={(e) => toggleInlineTranscript(e, call.id)}
+                              onClick={(e) => toggleInlineTranscript(e, call.id, call.audio_url)}
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs"
                             >
                               {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -328,18 +400,31 @@ export default function CallsPage() {
                                 <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
                                   {t.calls_audio}
                                 </h4>
-                                {call.audio_url ? (
+                                {inlineAudioSrc ? (
                                   <audio
                                     controls
                                     preload="none"
                                     className="w-full"
-                                    src={call.audio_url}
+                                    src={inlineAudioSrc}
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     Seu navegador nao suporta audio.
                                   </audio>
+                                ) : inlineAudioLoading ? (
+                                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    Carregando audio...
+                                  </div>
                                 ) : (
-                                  <p className="text-sm text-gray-500">{t.calls_not_provided}</p>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      ensureAudioLoaded(call.id, call.audio_url);
+                                    }}
+                                    className="px-3 py-1.5 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+                                  >
+                                    Carregar audio
+                                  </button>
                                 )}
                               </div>
 
@@ -515,14 +600,28 @@ export default function CallsPage() {
                   })()}
 
                   {/* Audio */}
-                  {selectedCall.audio_url && (
+                  {(selectedCall.audio_url || selectedCall.conversation_id) && (
                     <div>
                       <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
                         <Play className="w-4 h-4" /> {t.calls_audio}
                       </h4>
-                      <audio controls className="w-full" src={selectedCall.audio_url}>
-                        Seu navegador nao suporta audio.
-                      </audio>
+                      {modalAudioSrc ? (
+                        <audio controls className="w-full" src={modalAudioSrc}>
+                          Seu navegador nao suporta audio.
+                        </audio>
+                      ) : modalAudioLoading ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Carregando audio...
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => ensureAudioLoaded(selectedCall.id, selectedCall.audio_url)}
+                          className="px-3 py-1.5 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+                        >
+                          Carregar audio
+                        </button>
+                      )}
                       <p className="text-xs text-gray-400 mt-1">{t.calls_audio_expires}</p>
                     </div>
                   )}

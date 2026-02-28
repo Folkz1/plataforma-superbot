@@ -1,7 +1,7 @@
 """
 ElevenLabs Proxy API - Manage agents, tools, and prompts
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, ConfigDict
@@ -50,6 +50,19 @@ class ToolConfig(BaseModel):
     parameters: Dict[str, Any]
 
 
+class ActiveAgentCreate(BaseModel):
+    agent_id: str
+    label: Optional[str] = None
+    channel_type: str = "phone"
+    active: bool = True
+
+
+class ActiveAgentUpdate(BaseModel):
+    label: Optional[str] = None
+    channel_type: Optional[str] = None
+    active: Optional[bool] = None
+
+
 # Helper: Get client's ElevenLabs API key
 async def get_client_elevenlabs_key(client_id: str, db: AsyncSession) -> str:
     """Get ElevenLabs API key for client - check clients table first, then fallback"""
@@ -67,14 +80,92 @@ async def get_client_elevenlabs_key(client_id: str, db: AsyncSession) -> str:
 
 async def get_client_agent_ids(client_id: str, db: AsyncSession) -> List[str]:
     """Get list of ElevenLabs agent IDs configured for this client."""
+    # Preferred source: active project_voice_agents linked to tenant's project.
+    try:
+        project_id = await resolve_project_id_from_client_id(client_id, db)
+        result = await db.execute(
+            select(ProjectVoiceAgent.agent_id)
+            .where(
+                and_(
+                    ProjectVoiceAgent.project_id == project_id,
+                    ProjectVoiceAgent.active == True,
+                )
+            )
+            .order_by(desc(ProjectVoiceAgent.updated_at), desc(ProjectVoiceAgent.created_at))
+        )
+
+        seen: set[str] = set()
+        active_ids: List[str] = []
+        for agent_id in result.scalars().all():
+            normalized = str(agent_id or "").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                active_ids.append(normalized)
+        if active_ids:
+            return active_ids
+    except HTTPException:
+        # Some tenants may not have project mapping configured yet.
+        pass
+
+    # Backward compatibility source: clients.elevenlabs_agent_id
     result = await db.execute(
         select(Client.elevenlabs_agent_id).where(Client.id == client_id)
     )
     agent_id = result.scalar_one_or_none()
     if not agent_id:
         return []
-    # Support comma-separated agent IDs
-    return [aid.strip() for aid in agent_id.split(",") if aid.strip()]
+    return [aid.strip() for aid in str(agent_id).split(",") if aid.strip()]
+
+
+async def _sync_client_agent_ids(client_id: str, project_id: str, db: AsyncSession) -> None:
+    """Keep clients.elevenlabs_agent_id synchronized with active project_voice_agents."""
+    try:
+        client_uuid = UUID(str(client_id))
+    except Exception:
+        return
+
+    result = await db.execute(
+        select(ProjectVoiceAgent.agent_id)
+        .where(
+            and_(
+                ProjectVoiceAgent.project_id == project_id,
+                ProjectVoiceAgent.active == True,
+            )
+        )
+        .order_by(desc(ProjectVoiceAgent.updated_at), desc(ProjectVoiceAgent.created_at))
+    )
+    seen: set[str] = set()
+    ids: List[str] = []
+    for agent_id in result.scalars().all():
+        normalized = str(agent_id or "").strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            ids.append(normalized)
+
+    client_result = await db.execute(
+        select(Client).where(Client.id == client_uuid)
+    )
+    client = client_result.scalar_one_or_none()
+    if not client:
+        return
+
+    client.elevenlabs_agent_id = ",".join(ids) if ids else None
+
+
+def _normalize_agent_id(value: Optional[str]) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_channel_type(value: Optional[str]) -> str:
+    channel = str(value or "phone").strip().lower()
+    return channel or "phone"
+
+
+def _build_elevenlabs_audio_url(conversation_id: Optional[str]) -> Optional[str]:
+    conv_id = str(conversation_id or "").strip()
+    if not conv_id:
+        return None
+    return f"{ELEVENLABS_BASE_URL}/convai/conversations/{conv_id}/audio"
 
 
 # Helper: Check access
@@ -100,8 +191,33 @@ async def list_agents(
     api_key = await get_client_elevenlabs_key(client_id, db)
     allowed_ids = await get_client_agent_ids(client_id, db)
 
+    if not allowed_ids:
+        return {"agents": []}
+
+    project_id: Optional[str] = None
     try:
-        async with httpx.AsyncClient() as client:
+        project_id = await resolve_project_id_from_client_id(client_id, db)
+    except HTTPException:
+        project_id = None
+
+    configured_meta: Dict[str, Dict[str, Any]] = {}
+    if project_id:
+        cfg = await db.execute(
+            select(ProjectVoiceAgent.agent_id, ProjectVoiceAgent.label, ProjectVoiceAgent.channel_type, ProjectVoiceAgent.active)
+            .where(ProjectVoiceAgent.project_id == project_id)
+            .order_by(desc(ProjectVoiceAgent.updated_at), desc(ProjectVoiceAgent.created_at))
+        )
+        for row in cfg.all():
+            aid = _normalize_agent_id(row[0])
+            if aid and aid not in configured_meta:
+                configured_meta[aid] = {
+                    "label": row[1],
+                    "channel_type": row[2],
+                    "active": bool(row[3]),
+                }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{ELEVENLABS_BASE_URL}/convai/agents",
                 headers={"xi-api-key": api_key}
@@ -109,16 +225,272 @@ async def list_agents(
             response.raise_for_status()
             data = response.json()
 
-            # Filter agents by client's configured agent IDs (if any)
-            if allowed_ids and isinstance(data, dict) and "agents" in data:
-                data["agents"] = [
-                    a for a in data["agents"]
-                    if a.get("agent_id") in allowed_ids
-                ]
+            raw_agents = data.get("agents", []) if isinstance(data, dict) else []
+            by_id = {
+                _normalize_agent_id(agent.get("agent_id")): agent
+                for agent in raw_agents
+                if isinstance(agent, dict) and _normalize_agent_id(agent.get("agent_id"))
+            }
 
-            return data
+            ordered_agents: List[Dict[str, Any]] = []
+            for allowed_id in allowed_ids:
+                normalized_id = _normalize_agent_id(allowed_id)
+                agent_payload = by_id.get(normalized_id, {"agent_id": normalized_id, "_missing": True}).copy()
+                config = configured_meta.get(normalized_id) or {}
+
+                if config.get("label"):
+                    agent_payload.setdefault("name", config["label"])
+                    agent_payload["_configured_label"] = config["label"]
+                if config.get("channel_type"):
+                    agent_payload["_configured_channel_type"] = config["channel_type"]
+                if "active" in config:
+                    agent_payload["_configured_active"] = bool(config["active"])
+
+                ordered_agents.append(agent_payload)
+
+            if isinstance(data, dict):
+                data["agents"] = ordered_agents
+                return data
+            return {"agents": ordered_agents}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.get("/active-agents/{client_id}")
+async def list_active_agents(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """List linked voice agents for this tenant/project."""
+    check_access(client_id, current_user)
+    project_id = await resolve_project_id_from_client_id(client_id, db)
+
+    result = await db.execute(
+        select(ProjectVoiceAgent)
+        .where(ProjectVoiceAgent.project_id == project_id)
+        .order_by(desc(ProjectVoiceAgent.active), desc(ProjectVoiceAgent.updated_at), desc(ProjectVoiceAgent.created_at))
+    )
+    rows = result.scalars().all()
+
+    if not rows:
+        fallback_ids = await get_client_agent_ids(client_id, db)
+        return {
+            "project_id": project_id,
+            "agents": [
+                {
+                    "id": None,
+                    "agent_id": aid,
+                    "label": None,
+                    "channel_type": "phone",
+                    "active": True,
+                    "source": "clients_table",
+                }
+                for aid in fallback_ids
+            ],
+        }
+
+    return {
+        "project_id": project_id,
+        "agents": [
+            {
+                "id": str(row.id),
+                "agent_id": row.agent_id,
+                "label": row.label,
+                "channel_type": row.channel_type,
+                "active": bool(row.active),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.post("/active-agents/{client_id}")
+async def add_active_agent(
+    client_id: str,
+    data: ActiveAgentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Link an existing ElevenLabs agent_id as active for this tenant/project."""
+    check_access(client_id, current_user)
+    project_id = await resolve_project_id_from_client_id(client_id, db)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    agent_id = _normalize_agent_id(data.agent_id)
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id obrigatorio")
+
+    channel_type = _normalize_channel_type(data.channel_type)
+    provided_label = str(data.label or "").strip() or None
+    elevenlabs_name: Optional[str] = None
+
+    # Validate agent in ElevenLabs and capture current configured name.
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{ELEVENLABS_BASE_URL}/convai/agents/{agent_id}",
+                headers={"xi-api-key": api_key},
+            )
+            response.raise_for_status()
+            payload = response.json() if response.content else {}
+            elevenlabs_name = (
+                payload.get("name")
+                or payload.get("platform_settings", {}).get("widget_settings", {}).get("name")
+            )
+    except httpx.HTTPStatusError as e:
+        detail = "Agent nao encontrado no ElevenLabs"
+        if e.response is not None and e.response.text:
+            detail = f"{detail}: {e.response.text}"
+        raise HTTPException(status_code=400, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+    existing_result = await db.execute(
+        select(ProjectVoiceAgent)
+        .where(
+            and_(
+                ProjectVoiceAgent.project_id == project_id,
+                ProjectVoiceAgent.agent_id == agent_id,
+                ProjectVoiceAgent.channel_type == channel_type,
+            )
+        )
+        .order_by(desc(ProjectVoiceAgent.updated_at), desc(ProjectVoiceAgent.created_at))
+    )
+    row = existing_result.scalars().first()
+    if row:
+        row.active = bool(data.active)
+        row.label = provided_label or row.label or elevenlabs_name
+    else:
+        row = ProjectVoiceAgent(
+            project_id=project_id,
+            agent_id=agent_id,
+            label=provided_label or elevenlabs_name,
+            channel_type=channel_type,
+            active=bool(data.active),
+        )
+        db.add(row)
+
+    await db.flush()
+    await _sync_client_agent_ids(client_id, project_id, db)
+    await db.commit()
+    await db.refresh(row)
+
+    return {
+        "success": True,
+        "agent": {
+            "id": str(row.id),
+            "project_id": str(project_id),
+            "agent_id": row.agent_id,
+            "label": row.label,
+            "channel_type": row.channel_type,
+            "active": bool(row.active),
+        },
+    }
+
+
+@router.patch("/active-agents/{client_id}/{agent_id}")
+async def update_active_agent(
+    client_id: str,
+    agent_id: str,
+    data: ActiveAgentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Update linked active agent metadata for this tenant/project."""
+    check_access(client_id, current_user)
+    project_id = await resolve_project_id_from_client_id(client_id, db)
+
+    normalized_agent_id = _normalize_agent_id(agent_id)
+    if not normalized_agent_id:
+        raise HTTPException(status_code=400, detail="agent_id invalido")
+
+    stmt = select(ProjectVoiceAgent).where(
+        and_(
+            ProjectVoiceAgent.project_id == project_id,
+            ProjectVoiceAgent.agent_id == normalized_agent_id,
+        )
+    )
+    if data.channel_type is not None:
+        stmt = stmt.where(ProjectVoiceAgent.channel_type == _normalize_channel_type(data.channel_type))
+
+    result = await db.execute(stmt.order_by(desc(ProjectVoiceAgent.updated_at), desc(ProjectVoiceAgent.created_at)))
+    row = result.scalars().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Agente ativo nao encontrado para este projeto")
+
+    if data.label is not None:
+        row.label = str(data.label).strip() or None
+    if data.active is not None:
+        row.active = bool(data.active)
+    if data.channel_type is not None:
+        row.channel_type = _normalize_channel_type(data.channel_type)
+
+    await db.flush()
+    await _sync_client_agent_ids(client_id, project_id, db)
+    await db.commit()
+    await db.refresh(row)
+
+    return {
+        "success": True,
+        "agent": {
+            "id": str(row.id),
+            "project_id": str(project_id),
+            "agent_id": row.agent_id,
+            "label": row.label,
+            "channel_type": row.channel_type,
+            "active": bool(row.active),
+        },
+    }
+
+
+@router.delete("/active-agents/{client_id}/{agent_id}")
+async def deactivate_active_agent(
+    client_id: str,
+    agent_id: str,
+    channel_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Deactivate (unlink) agent from project without deleting it on ElevenLabs."""
+    check_access(client_id, current_user)
+    project_id = await resolve_project_id_from_client_id(client_id, db)
+
+    normalized_agent_id = _normalize_agent_id(agent_id)
+    if not normalized_agent_id:
+        raise HTTPException(status_code=400, detail="agent_id invalido")
+
+    stmt = select(ProjectVoiceAgent).where(
+        and_(
+            ProjectVoiceAgent.project_id == project_id,
+            ProjectVoiceAgent.agent_id == normalized_agent_id,
+        )
+    )
+    if channel_type:
+        stmt = stmt.where(ProjectVoiceAgent.channel_type == _normalize_channel_type(channel_type))
+
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Agente ativo nao encontrado para este projeto")
+
+    deactivated = 0
+    for row in rows:
+        if row.active:
+            row.active = False
+            deactivated += 1
+
+    await db.flush()
+    await _sync_client_agent_ids(client_id, project_id, db)
+    await db.commit()
+
+    return {
+        "success": True,
+        "deactivated": deactivated,
+        "message": "Agente desvinculado do projeto",
+    }
 
 
 @router.get("/agents/{client_id}/{agent_id}")
@@ -639,6 +1011,11 @@ async def list_calls(
     def _agent_display(c):
         return c.agent_name or agent_names.get(c.agent_id) or c.agent_id or "-"
 
+    def _audio_url(c: VoiceCallHistory) -> Optional[str]:
+        if c.audio_url:
+            return c.audio_url
+        return _build_elevenlabs_audio_url(c.conversation_id)
+
     return {
         "stats": {
             "total": total,
@@ -661,7 +1038,7 @@ async def list_calls(
                 "call_successful": c.call_successful,
                 "termination_reason": c.termination_reason,
                 "transcript_summary": c.transcript_summary,
-                "audio_url": c.audio_url,
+                "audio_url": _audio_url(c),
             }
             for c in calls
         ],
@@ -717,7 +1094,69 @@ async def get_call_detail(
         "transcript": call.transcript,
         "call_successful": call.call_successful,
         "termination_reason": call.termination_reason,
-        "audio_url": call.audio_url,
+        "audio_url": call.audio_url or _build_elevenlabs_audio_url(call.conversation_id),
         "data_collection": call.data_collection,
         "created_at": call.created_at.isoformat() if call.created_at else None,
     }
+
+
+@router.get("/calls/{client_id}/{call_id}/audio")
+async def get_call_audio(
+    client_id: str,
+    call_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """
+    Stream call audio to the dashboard.
+    - Uses stored audio_url when present.
+    - Falls back to ElevenLabs conversation audio endpoint.
+    """
+    check_access(client_id, current_user)
+    project_id = await resolve_project_id_from_client_id(client_id, db)
+
+    result = await db.execute(
+        select(VoiceCallHistory).where(
+            and_(
+                VoiceCallHistory.id == call_id,
+                VoiceCallHistory.project_id == project_id,
+            )
+        )
+    )
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=404, detail="Ligacao nao encontrada")
+
+    source_url = str(call.audio_url or "").strip() or _build_elevenlabs_audio_url(call.conversation_id)
+    if not source_url:
+        raise HTTPException(status_code=404, detail="Audio nao disponivel para esta ligacao")
+
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    async def _fetch(url: str) -> httpx.Response:
+        headers: Dict[str, str] = {}
+        if "api.elevenlabs.io" in url:
+            headers["xi-api-key"] = api_key
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            return await client.get(url, headers=headers)
+
+    response = await _fetch(source_url)
+    if response.status_code >= 400:
+        fallback_url = _build_elevenlabs_audio_url(call.conversation_id)
+        if fallback_url and fallback_url != source_url:
+            response = await _fetch(fallback_url)
+
+    if response.status_code >= 400:
+        detail = response.text.strip() if response.text else "Falha ao obter audio no ElevenLabs"
+        raise HTTPException(status_code=502, detail=detail)
+
+    filename = f"{call.conversation_id or call.id}.mp3"
+    content_type = response.headers.get("content-type", "audio/mpeg")
+    return Response(
+        content=response.content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )
