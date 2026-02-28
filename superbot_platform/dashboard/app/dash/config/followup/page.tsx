@@ -1,127 +1,290 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import {
-  Clock, Save, Plus, Trash2, CheckCircle, AlertCircle,
-  Loader2, ToggleLeft, ToggleRight, MessageSquare
-} from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Save, ToggleLeft, ToggleRight, Volume2 } from 'lucide-react';
 
-interface FollowupTemplate {
+type FollowupTemplate = {
   id: string;
   name: string;
   message: string;
   delay_hours: number;
   channel: 'whatsapp' | 'all';
-}
-
-interface FollowupConfig {
-  templates: FollowupTemplate[];
-  auto_followup: boolean;
-  default_delay_hours: number;
-  max_followups: number;
-}
-
-const DEFAULT_CONFIG: FollowupConfig = {
-  templates: [],
-  auto_followup: false,
-  default_delay_hours: 24,
-  max_followups: 3,
 };
+
+type AiCfg = {
+  enabled?: boolean;
+  dry_run?: boolean;
+  model?: string;
+  timezone?: string;
+  inactive_after_minutes?: number;
+  min_gap_minutes?: number;
+  max_attempts?: number;
+  history_limit?: number;
+  batch_limit?: number;
+  send_from_hour?: number;
+  send_until_hour?: number;
+  audio_enabled?: boolean;
+  audio_first_followup_only?: boolean;
+  audio_send_text_after_audio?: boolean;
+  audio_voice_id?: string;
+  audio_model_id?: string;
+  audio_stability?: number;
+  audio_similarity_boost?: number;
+  prompt?: string;
+  prompt_custom?: string;
+  [k: string]: unknown;
+};
+
+type FollowupConfig = {
+  templates?: FollowupTemplate[];
+  auto_followup?: boolean;
+  default_delay_hours?: number;
+  max_followups?: number;
+  channels?: {
+    whatsapp?: {
+      ai_reengagement?: AiCfg;
+      enabled?: boolean;
+      dry_run?: boolean;
+      [k: string]: unknown;
+    };
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+};
+
+type AiForm = {
+  enabled: boolean;
+  dryRun: boolean;
+  model: string;
+  timezone: string;
+  inactiveAfterMinutes: number;
+  minGapMinutes: number;
+  maxAttempts: number;
+  historyLimit: number;
+  batchLimit: number;
+  sendFromHour: number;
+  sendUntilHour: number;
+  audioEnabled: boolean;
+  audioFirstFollowupOnly: boolean;
+  audioSendTextAfterAudio: boolean;
+  audioVoiceId: string;
+  audioModelId: string;
+  audioStability: number;
+  audioSimilarityBoost: number;
+};
+
+const DEFAULT_AI: AiForm = {
+  enabled: true,
+  dryRun: false,
+  model: 'openai/gpt-4o-mini',
+  timezone: 'America/Sao_Paulo',
+  inactiveAfterMinutes: 180,
+  minGapMinutes: 240,
+  maxAttempts: 2,
+  historyLimit: 30,
+  batchLimit: 50,
+  sendFromHour: 8,
+  sendUntilHour: 19,
+  audioEnabled: true,
+  audioFirstFollowupOnly: true,
+  audioSendTextAfterAudio: true,
+  audioVoiceId: 'r2fkFV8WAqXq2AqBpgJT',
+  audioModelId: 'eleven_multilingual_v2',
+  audioStability: 0.45,
+  audioSimilarityBoost: 0.7,
+};
+
+const OUTPUT_SCHEMA = `{
+  "should_send": true|false,
+  "send_audio": true|false,
+  "audio_text": "texto curto para o audio (opcional)",
+  "message": "texto curto em pt-BR, pode ter blocos separados por linha em branco",
+  "reason": "1 frase curta",
+  "next_wait_minutes": 120
+}`;
+
+const CUSTOM_START = '[[CUSTOM_INSTRUCTIONS_START]]';
+const CUSTOM_END = '[[CUSTOM_INSTRUCTIONS_END]]';
+
+function clampInt(v: number, min: number, max: number): number {
+  if (!Number.isFinite(v)) return min;
+  return Math.max(min, Math.min(max, Math.round(v)));
+}
+
+function clampFloat(v: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(min, Math.min(max, v));
+}
+
+function n(v: unknown, fb: number): number {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : fb;
+}
+
+function buildPrompt(custom: string): string {
+  return [
+    'Voce e um motor de reengajamento para WhatsApp (janela oficial de 24h).',
+    '',
+    'Objetivo: decidir se vale enviar follow-up e em qual formato.',
+    '',
+    'Responda APENAS JSON valido (sem markdown):',
+    OUTPUT_SCHEMA,
+    '',
+    'Regras fixas:',
+    '- Se o usuario pediu para parar, should_send=false.',
+    '- Se contexto insuficiente, should_send=false.',
+    '- Se count=0 e should_send=true, prefira send_audio=true com audio_text + message.',
+    '- Se send_audio=true e audio_text vazio, usar a primeira frase da message.',
+    '- Quando should_send=true, manter next_wait_minutes=120.',
+    '',
+    CUSTOM_START,
+    custom.trim() || '(sem instrucoes personalizadas)',
+    CUSTOM_END,
+  ].join('\n');
+}
+
+function extractCustom(prompt: string): string | null {
+  const s = prompt.indexOf(CUSTOM_START);
+  const e = prompt.indexOf(CUSTOM_END);
+  if (s === -1 || e === -1 || e <= s) return null;
+  const value = prompt.slice(s + CUSTOM_START.length, e).trim();
+  return value === '(sem instrucoes personalizadas)' ? '' : value;
+}
 
 export default function FollowupConfigPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tenantId, setTenantId] = useState('');
-  const [enabled, setEnabled] = useState(false);
-  const [config, setConfig] = useState<FollowupConfig>(DEFAULT_CONFIG);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Edit template modal
-  const [editingTemplate, setEditingTemplate] = useState<FollowupTemplate | null>(null);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [baseConfig, setBaseConfig] = useState<FollowupConfig>({});
+  const [ai, setAi] = useState<AiForm>(DEFAULT_AI);
+  const [promptCustom, setPromptCustom] = useState('');
+  const [legacyPrompt, setLegacyPrompt] = useState(false);
+
+  const promptPreview = useMemo(() => buildPrompt(promptCustom), [promptCustom]);
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
-    if (!userData) { router.push('/login'); return; }
-    const parsedUser = JSON.parse(userData);
-    const tId = parsedUser.role === 'admin'
-      ? localStorage.getItem('active_tenant_id')
-      : parsedUser.client_id;
-    if (!tId) { router.push(parsedUser.role === 'admin' ? '/admin' : '/login'); return; }
+    if (!userData) {
+      router.push('/login');
+      return;
+    }
+    const user = JSON.parse(userData) as { role?: string; client_id?: string };
+    const tId = user.role === 'admin' ? localStorage.getItem('active_tenant_id') : user.client_id;
+    if (!tId) {
+      router.push(user.role === 'admin' ? '/admin' : '/login');
+      return;
+    }
     setTenantId(tId);
-    loadConfig(tId);
+    void loadConfig(tId);
   }, [router]);
 
   const loadConfig = async (tId: string) => {
     try {
       const res = await api.get(`/api/config/meta/${tId}`);
-      const secrets = res.data.secrets || {};
-      setEnabled(secrets.followup_enabled || false);
-      setConfig({
-        ...DEFAULT_CONFIG,
-        ...(secrets.followup_config || {}),
+      const secrets = (res.data?.secrets || {}) as { followup_enabled?: boolean; followup_config?: FollowupConfig };
+      const cfg = (secrets.followup_config || {}) as FollowupConfig;
+      const wa = (cfg.channels?.whatsapp || {}) as { ai_reengagement?: AiCfg; dry_run?: boolean };
+      const aiCfg = (wa.ai_reengagement || {}) as AiCfg;
+
+      setEnabled(Boolean(secrets.followup_enabled));
+      setBaseConfig(cfg);
+      setAi({
+        enabled: aiCfg.enabled !== false,
+        dryRun: Boolean(aiCfg.dry_run ?? wa.dry_run ?? false),
+        model: String(aiCfg.model || DEFAULT_AI.model),
+        timezone: String(aiCfg.timezone || DEFAULT_AI.timezone),
+        inactiveAfterMinutes: Math.max(10, n(aiCfg.inactive_after_minutes, DEFAULT_AI.inactiveAfterMinutes)),
+        minGapMinutes: Math.max(10, n(aiCfg.min_gap_minutes, DEFAULT_AI.minGapMinutes)),
+        maxAttempts: Math.max(1, n(aiCfg.max_attempts, DEFAULT_AI.maxAttempts)),
+        historyLimit: clampInt(n(aiCfg.history_limit, DEFAULT_AI.historyLimit), 10, 60),
+        batchLimit: clampInt(n(aiCfg.batch_limit, DEFAULT_AI.batchLimit), 1, 200),
+        sendFromHour: clampInt(n(aiCfg.send_from_hour, DEFAULT_AI.sendFromHour), 0, 23),
+        sendUntilHour: clampInt(n(aiCfg.send_until_hour, DEFAULT_AI.sendUntilHour), 0, 23),
+        audioEnabled: aiCfg.audio_enabled !== false,
+        audioFirstFollowupOnly: aiCfg.audio_first_followup_only !== false,
+        audioSendTextAfterAudio: aiCfg.audio_send_text_after_audio !== false,
+        audioVoiceId: String(aiCfg.audio_voice_id || DEFAULT_AI.audioVoiceId),
+        audioModelId: String(aiCfg.audio_model_id || DEFAULT_AI.audioModelId),
+        audioStability: clampFloat(n(aiCfg.audio_stability, DEFAULT_AI.audioStability), 0, 1, DEFAULT_AI.audioStability),
+        audioSimilarityBoost: clampFloat(n(aiCfg.audio_similarity_boost, DEFAULT_AI.audioSimilarityBoost), 0, 1, DEFAULT_AI.audioSimilarityBoost),
       });
-    } catch (error) {
-      console.error('Erro ao carregar config:', error);
+
+      const custom = typeof aiCfg.prompt_custom === 'string' ? aiCfg.prompt_custom.trim() : '';
+      const raw = typeof aiCfg.prompt === 'string' ? aiCfg.prompt.trim() : '';
+      if (custom) {
+        setPromptCustom(custom);
+        setLegacyPrompt(false);
+      } else {
+        const extracted = raw ? extractCustom(raw) : null;
+        if (extracted !== null) {
+          setPromptCustom(extracted);
+          setLegacyPrompt(false);
+        } else {
+          setPromptCustom(raw);
+          setLegacyPrompt(Boolean(raw) && raw.includes('Responda APENAS JSON valido'));
+        }
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Erro ao carregar configuracao de follow-up' });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSave = async () => {
+  const onSave = async () => {
+    if (!tenantId) return;
     setSaving(true);
     setMessage(null);
     try {
+      const nextCfg = JSON.parse(JSON.stringify(baseConfig || {})) as FollowupConfig;
+      if (!nextCfg.channels) nextCfg.channels = {};
+      const nextWa = (nextCfg.channels.whatsapp || {}) as Record<string, unknown>;
+      nextWa.enabled = enabled;
+      nextWa.dry_run = ai.dryRun;
+      nextWa.ai_reengagement = {
+        ...(nextWa.ai_reengagement as Record<string, unknown> | undefined),
+        enabled: ai.enabled,
+        dry_run: ai.dryRun,
+        model: ai.model.trim() || DEFAULT_AI.model,
+        timezone: ai.timezone.trim() || DEFAULT_AI.timezone,
+        inactive_after_minutes: clampInt(ai.inactiveAfterMinutes, 10, 1440),
+        min_gap_minutes: clampInt(ai.minGapMinutes, 10, 1440),
+        max_attempts: clampInt(ai.maxAttempts, 1, 30),
+        history_limit: clampInt(ai.historyLimit, 10, 60),
+        batch_limit: clampInt(ai.batchLimit, 1, 200),
+        send_from_hour: clampInt(ai.sendFromHour, 0, 23),
+        send_until_hour: clampInt(ai.sendUntilHour, 0, 23),
+        audio_enabled: ai.audioEnabled,
+        audio_first_followup_only: ai.audioFirstFollowupOnly,
+        audio_send_text_after_audio: ai.audioSendTextAfterAudio,
+        audio_voice_id: ai.audioVoiceId.trim() || DEFAULT_AI.audioVoiceId,
+        audio_model_id: ai.audioModelId.trim() || DEFAULT_AI.audioModelId,
+        audio_stability: clampFloat(ai.audioStability, 0, 1, DEFAULT_AI.audioStability),
+        audio_similarity_boost: clampFloat(ai.audioSimilarityBoost, 0, 1, DEFAULT_AI.audioSimilarityBoost),
+        prompt_custom: promptCustom.trim(),
+        prompt: buildPrompt(promptCustom),
+      };
+      nextCfg.channels.whatsapp = nextWa as FollowupConfig['channels']['whatsapp'];
+
       await api.patch(`/api/config/meta/${tenantId}`, {
         followup_enabled: enabled,
-        followup_config: config,
+        followup_config: nextCfg,
       });
+
+      setBaseConfig(nextCfg);
+      setLegacyPrompt(false);
       setMessage({ type: 'success', text: 'Configuracao salva!' });
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || 'Erro ao salvar' });
+    } catch {
+      setMessage({ type: 'error', text: 'Erro ao salvar configuracao' });
     } finally {
       setSaving(false);
     }
-  };
-
-  const addTemplate = () => {
-    setEditingTemplate({
-      id: crypto.randomUUID(),
-      name: '',
-      message: '',
-      delay_hours: config.default_delay_hours,
-      channel: 'whatsapp',
-    });
-    setShowTemplateModal(true);
-  };
-
-  const editTemplate = (template: FollowupTemplate) => {
-    setEditingTemplate({ ...template });
-    setShowTemplateModal(true);
-  };
-
-  const saveTemplate = () => {
-    if (!editingTemplate || !editingTemplate.name || !editingTemplate.message) return;
-    const existing = config.templates.findIndex(t => t.id === editingTemplate.id);
-    const newTemplates = [...config.templates];
-    if (existing >= 0) {
-      newTemplates[existing] = editingTemplate;
-    } else {
-      newTemplates.push(editingTemplate);
-    }
-    setConfig(prev => ({ ...prev, templates: newTemplates }));
-    setShowTemplateModal(false);
-    setEditingTemplate(null);
-  };
-
-  const deleteTemplate = (id: string) => {
-    setConfig(prev => ({
-      ...prev,
-      templates: prev.templates.filter(t => t.id !== id),
-    }));
   };
 
   if (loading) {
@@ -133,33 +296,20 @@ export default function FollowupConfigPage() {
   }
 
   return (
-    <div className="p-6 lg:p-8 max-w-4xl">
-      {/* Header */}
+    <div className="p-6 lg:p-8 max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Follow-up</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Configure templates e regras de follow-up automatico
-        </p>
+        <p className="text-sm text-gray-500 mt-1">Configuracao avancada do AI reengagement.</p>
       </div>
 
-      {/* Toggle Enable/Disable */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Follow-up Automatico</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Quando ativado, o sistema envia mensagens de acompanhamento automaticamente
-            </p>
+            <p className="text-sm text-gray-500 mt-1">Liga/desliga disparo automatico.</p>
           </div>
-          <button
-            onClick={() => setEnabled(!enabled)}
-            className="flex items-center gap-2"
-          >
-            {enabled ? (
-              <ToggleRight className="w-10 h-10 text-blue-600" />
-            ) : (
-              <ToggleLeft className="w-10 h-10 text-gray-400" />
-            )}
+          <button onClick={() => setEnabled(!enabled)} className="flex items-center gap-2">
+            {enabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
             <span className={`text-sm font-medium ${enabled ? 'text-blue-600' : 'text-gray-400'}`}>
               {enabled ? 'Ativado' : 'Desativado'}
             </span>
@@ -167,192 +317,73 @@ export default function FollowupConfigPage() {
         </div>
       </div>
 
-      {/* General Settings */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Configuracoes Gerais</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Intervalo padrao (horas)
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={168}
-              value={config.default_delay_hours}
-              onChange={(e) => setConfig(prev => ({ ...prev, default_delay_hours: Number(e.target.value) }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-400 mt-1">Tempo antes de enviar follow-up</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Maximo de follow-ups por conversa
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={config.max_followups}
-              onChange={(e) => setConfig(prev => ({ ...prev, max_followups: Number(e.target.value) }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-400 mt-1">Limite de mensagens de follow-up</p>
-          </div>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Parametros da IA</h2>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <label className="text-sm text-gray-700">Modelo<input value={ai.model} onChange={(e) => setAi({ ...ai, model: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Timezone<input value={ai.timezone} onChange={(e) => setAi({ ...ai, timezone: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Inicio (0-23)<input type="number" min={0} max={23} value={ai.sendFromHour} onChange={(e) => setAi({ ...ai, sendFromHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Fim (0-23)<input type="number" min={0} max={23} value={ai.sendUntilHour} onChange={(e) => setAi({ ...ai, sendUntilHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Inatividade (min)<input type="number" min={10} value={ai.inactiveAfterMinutes} onChange={(e) => setAi({ ...ai, inactiveAfterMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Gap (min)<input type="number" min={10} value={ai.minGapMinutes} onChange={(e) => setAi({ ...ai, minGapMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Max tentativas<input type="number" min={1} max={30} value={ai.maxAttempts} onChange={(e) => setAi({ ...ai, maxAttempts: clampInt(Number(e.target.value), 1, 30) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">History limite<input type="number" min={10} max={60} value={ai.historyLimit} onChange={(e) => setAi({ ...ai, historyLimit: clampInt(Number(e.target.value), 10, 60) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Batch limite<input type="number" min={1} max={200} value={ai.batchLimit} onChange={(e) => setAi({ ...ai, batchLimit: clampInt(Number(e.target.value), 1, 200) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Dry run
+            <button onClick={() => setAi({ ...ai, dryRun: !ai.dryRun })} className="mt-1 flex items-center gap-2">
+              {ai.dryRun ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
+            </button>
+          </label>
+          <label className="text-sm text-gray-700">IA habilitada
+            <button onClick={() => setAi({ ...ai, enabled: !ai.enabled })} className="mt-1 flex items-center gap-2">
+              {ai.enabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
+            </button>
+          </label>
         </div>
       </div>
 
-      {/* Templates */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Templates de Mensagem</h2>
-          <button
-            onClick={addTemplate}
-            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium"
-          >
-            <Plus className="w-4 h-4" />
-            Novo Template
-          </button>
+        <div className="flex items-center gap-2 mb-4">
+          <Volume2 className="w-5 h-5 text-indigo-600" />
+          <h2 className="text-lg font-semibold text-gray-900">Audio</h2>
         </div>
-
-        {config.templates.length === 0 ? (
-          <div className="text-center py-8">
-            <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500">Nenhum template criado</p>
-            <p className="text-sm text-gray-400 mt-1">
-              Crie templates para padronizar as mensagens de follow-up
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {config.templates.map((template) => (
-              <div
-                key={template.id}
-                className="flex items-start justify-between gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition cursor-pointer"
-                onClick={() => editTemplate(template)}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-sm font-semibold text-gray-900">{template.name}</h3>
-                    <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
-                      {template.delay_hours}h
-                    </span>
-                    <span className="text-xs text-gray-500 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                      {template.channel === 'all' ? 'Todos' : 'WhatsApp'}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 truncate">{template.message}</p>
-                </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteTemplate(template.id); }}
-                  className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition flex-shrink-0"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <label className="text-sm text-gray-700">Audio habilitado<button onClick={() => setAi({ ...ai, audioEnabled: !ai.audioEnabled })} className="mt-1 flex items-center">{ai.audioEnabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}</button></label>
+          <label className="text-sm text-gray-700">Apenas 1o follow-up<button onClick={() => setAi({ ...ai, audioFirstFollowupOnly: !ai.audioFirstFollowupOnly })} className="mt-1 flex items-center">{ai.audioFirstFollowupOnly ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}</button></label>
+          <label className="text-sm text-gray-700">Texto apos audio<button onClick={() => setAi({ ...ai, audioSendTextAfterAudio: !ai.audioSendTextAfterAudio })} className="mt-1 flex items-center">{ai.audioSendTextAfterAudio ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}</button></label>
+          <label className="text-sm text-gray-700">Voice ID<input value={ai.audioVoiceId} onChange={(e) => setAi({ ...ai, audioVoiceId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Audio model<input value={ai.audioModelId} onChange={(e) => setAi({ ...ai, audioModelId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Stability<input type="number" min={0} max={1} step={0.01} value={ai.audioStability} onChange={(e) => setAi({ ...ai, audioStability: clampFloat(Number(e.target.value), 0, 1, 0.45) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+          <label className="text-sm text-gray-700">Similarity<input type="number" min={0} max={1} step={0.01} value={ai.audioSimilarityBoost} onChange={(e) => setAi({ ...ai, audioSimilarityBoost: clampFloat(Number(e.target.value), 0, 1, 0.7) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
+        </div>
       </div>
 
-      {/* Save Button */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-2">Prompt (schema fixo)</h2>
+        <p className="text-sm text-gray-500 mb-3">Personalize so as instrucoes. O formato JSON de resposta permanece fixo.</p>
+        {legacyPrompt && <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">Prompt legado detectado. Ao salvar, ele sera padronizado.</div>}
+        <textarea value={promptCustom} onChange={(e) => setPromptCustom(e.target.value)} rows={7} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900" placeholder="Instrucoes comerciais e estilo de escrita..." />
+        <pre className="mt-3 text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto text-gray-800">{OUTPUT_SCHEMA}</pre>
+        <details className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
+          <summary className="cursor-pointer text-sm font-medium text-gray-700">Ver prompt final</summary>
+          <pre className="mt-3 text-xs whitespace-pre-wrap text-gray-800">{promptPreview}</pre>
+        </details>
+      </div>
+
       <div className="flex items-center justify-between">
         <div>
           {message && (
-            <div className={`flex items-center gap-2 text-sm ${
-              message.type === 'success' ? 'text-green-700' : 'text-red-700'
-            }`}>
+            <div className={`flex items-center gap-2 text-sm ${message.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
               {message.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
               {message.text}
             </div>
           )}
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50"
-        >
+        <button onClick={onSave} disabled={saving} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           Salvar Configuracao
         </button>
       </div>
-
-      {/* Template Modal */}
-      {showTemplateModal && editingTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
-            <div className="px-6 py-4 border-b">
-              <h3 className="text-lg font-semibold text-gray-900">
-                {config.templates.find(t => t.id === editingTemplate.id) ? 'Editar' : 'Novo'} Template
-              </h3>
-            </div>
-            <div className="px-6 py-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nome do template</label>
-                <input
-                  type="text"
-                  value={editingTemplate.name}
-                  onChange={(e) => setEditingTemplate(prev => prev ? { ...prev, name: e.target.value } : null)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Ex: Lembrete 24h"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Mensagem</label>
-                <textarea
-                  value={editingTemplate.message}
-                  onChange={(e) => setEditingTemplate(prev => prev ? { ...prev, message: e.target.value } : null)}
-                  rows={4}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Ola {{nome}}, tudo bem? Notei que voce demonstrou interesse em..."
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  Use {'{{nome}}'}, {'{{telefone}}'}, {'{{email}}'} como variaveis
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Delay (horas)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={168}
-                    value={editingTemplate.delay_hours}
-                    onChange={(e) => setEditingTemplate(prev => prev ? { ...prev, delay_hours: Number(e.target.value) } : null)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Canal</label>
-                  <select
-                    value={editingTemplate.channel}
-                    onChange={(e) => setEditingTemplate(prev => prev ? { ...prev, channel: e.target.value as 'whatsapp' | 'all' } : null)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="all">Todos os canais</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3">
-              <button
-                onClick={() => { setShowTemplateModal(false); setEditingTemplate(null); }}
-                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={saveTemplate}
-                disabled={!editingTemplate.name || !editingTemplate.message}
-                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-              >
-                Salvar Template
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
