@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { AlertCircle, CheckCircle, Loader2, Save, ToggleLeft, ToggleRight, Volume2 } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, Plus, Save, ToggleLeft, ToggleRight, Trash2, Volume2 } from 'lucide-react';
 
 type FollowupTemplate = {
   id: string;
@@ -11,6 +11,19 @@ type FollowupTemplate = {
   message: string;
   delay_hours: number;
   channel: 'whatsapp' | 'all';
+};
+
+type StageMode = 'template' | 'session';
+
+type FollowupStageCfg = {
+  stage?: number;
+  after_hours?: number;
+  mode?: StageMode | string;
+  template_name?: string;
+  language_code?: string;
+  text?: string;
+  components?: unknown;
+  [k: string]: unknown;
 };
 
 type AiCfg = {
@@ -45,6 +58,7 @@ type FollowupConfig = {
   channels?: {
     whatsapp?: {
       ai_reengagement?: AiCfg;
+      stages?: FollowupStageCfg[];
       enabled?: boolean;
       dry_run?: boolean;
       [k: string]: unknown;
@@ -75,6 +89,17 @@ type AiForm = {
   audioSimilarityBoost: number;
 };
 
+type StageForm = {
+  id: string;
+  stage: number;
+  afterHours: number;
+  mode: StageMode;
+  templateName: string;
+  languageCode: string;
+  text: string;
+  componentsText: string;
+};
+
 const DEFAULT_AI: AiForm = {
   enabled: true,
   dryRun: false,
@@ -94,6 +119,16 @@ const DEFAULT_AI: AiForm = {
   audioModelId: 'eleven_multilingual_v2',
   audioStability: 0.45,
   audioSimilarityBoost: 0.7,
+};
+
+const DEFAULT_STAGE: Omit<StageForm, 'id'> = {
+  stage: 1,
+  afterHours: 24,
+  mode: 'template',
+  templateName: '',
+  languageCode: 'pt_BR',
+  text: '',
+  componentsText: '[]',
 };
 
 const OUTPUT_SCHEMA = `{
@@ -121,6 +156,70 @@ function clampFloat(v: number, min: number, max: number, fallback: number): numb
 function n(v: unknown, fb: number): number {
   const x = Number(v);
   return Number.isFinite(x) ? x : fb;
+}
+
+function genId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+}
+
+function normalizeStageMode(value: unknown): StageMode {
+  return String(value || '').toLowerCase() === 'session' ? 'session' : 'template';
+}
+
+function parseStagesFromConfig(rawStages: unknown): StageForm[] {
+  if (!Array.isArray(rawStages)) return [];
+
+  return rawStages.map((raw, index) => {
+    const st = (raw || {}) as FollowupStageCfg;
+    const components = st.components;
+
+    let componentsText = '[]';
+    if (components !== undefined) {
+      try {
+        componentsText = JSON.stringify(components, null, 2);
+      } catch {
+        componentsText = '[]';
+      }
+    }
+
+    return {
+      id: genId(),
+      stage: clampInt(n(st.stage, index + 1), 1, 99),
+      afterHours: Math.max(0, clampInt(n(st.after_hours, 24), 0, 24 * 30)),
+      mode: normalizeStageMode(st.mode),
+      templateName: String(st.template_name || '').trim(),
+      languageCode: String(st.language_code || 'pt_BR').trim() || 'pt_BR',
+      text: String(st.text || '').trim(),
+      componentsText,
+    };
+  });
+}
+
+function buildStagesForSave(stages: StageForm[]): FollowupStageCfg[] {
+  return stages.map((item) => {
+    const templateName = item.templateName.trim();
+    const languageCode = item.languageCode.trim() || 'pt_BR';
+    const text = item.text.trim();
+    const result: FollowupStageCfg = {
+      stage: clampInt(item.stage, 1, 99),
+      after_hours: Math.max(0, clampInt(item.afterHours, 0, 24 * 30)),
+      mode: item.mode,
+      language_code: languageCode,
+    };
+
+    if (templateName) result.template_name = templateName;
+    if (text) result.text = text;
+    if (item.componentsText.trim()) {
+      result.components = JSON.parse(item.componentsText);
+    } else {
+      result.components = [];
+    }
+
+    return result;
+  });
 }
 
 function buildPrompt(custom: string): string {
@@ -163,6 +262,7 @@ export default function FollowupConfigPage() {
   const [enabled, setEnabled] = useState(false);
   const [baseConfig, setBaseConfig] = useState<FollowupConfig>({});
   const [ai, setAi] = useState<AiForm>(DEFAULT_AI);
+  const [stages, setStages] = useState<StageForm[]>([]);
   const [promptCustom, setPromptCustom] = useState('');
   const [legacyPrompt, setLegacyPrompt] = useState(false);
 
@@ -191,9 +291,11 @@ export default function FollowupConfigPage() {
       const cfg = (secrets.followup_config || {}) as FollowupConfig;
       const wa = (cfg.channels?.whatsapp || {}) as { ai_reengagement?: AiCfg; dry_run?: boolean };
       const aiCfg = (wa.ai_reengagement || {}) as AiCfg;
+      const loadedStages = parseStagesFromConfig((wa as { stages?: unknown }).stages);
 
       setEnabled(Boolean(secrets.followup_enabled));
       setBaseConfig(cfg);
+      setStages(loadedStages);
       setAi({
         enabled: aiCfg.enabled !== false,
         dryRun: Boolean(aiCfg.dry_run ?? wa.dry_run ?? false),
@@ -242,11 +344,27 @@ export default function FollowupConfigPage() {
     setSaving(true);
     setMessage(null);
     try {
+      for (const stageItem of stages) {
+        const stageLabel = `stage ${stageItem.stage}`;
+        if (stageItem.mode === 'template' && !stageItem.templateName.trim()) {
+          throw new Error(`${stageLabel}: template_name é obrigatório em modo template.`);
+        }
+        if (!stageItem.componentsText.trim()) {
+          continue;
+        }
+        try {
+          JSON.parse(stageItem.componentsText);
+        } catch {
+          throw new Error(`${stageLabel}: components deve ser JSON válido.`);
+        }
+      }
+
       const nextCfg = JSON.parse(JSON.stringify(baseConfig || {})) as FollowupConfig;
       if (!nextCfg.channels) nextCfg.channels = {};
       const nextWa = (nextCfg.channels.whatsapp || {}) as Record<string, unknown>;
       nextWa.enabled = enabled;
       nextWa.dry_run = ai.dryRun;
+      nextWa.stages = buildStagesForSave(stages);
       nextWa.ai_reengagement = {
         ...(nextWa.ai_reengagement as Record<string, unknown> | undefined),
         enabled: ai.enabled,
@@ -270,7 +388,7 @@ export default function FollowupConfigPage() {
         prompt_custom: promptCustom.trim(),
         prompt: buildPrompt(promptCustom),
       };
-      nextCfg.channels.whatsapp = nextWa as FollowupConfig['channels']['whatsapp'];
+      nextCfg.channels.whatsapp = nextWa as NonNullable<FollowupConfig['channels']>['whatsapp'];
 
       await api.patch(`/api/config/meta/${tenantId}`, {
         followup_enabled: enabled,
@@ -280,11 +398,34 @@ export default function FollowupConfigPage() {
       setBaseConfig(nextCfg);
       setLegacyPrompt(false);
       setMessage({ type: 'success', text: 'Configuracao salva!' });
-    } catch {
-      setMessage({ type: 'error', text: 'Erro ao salvar configuracao' });
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Erro ao salvar configuracao';
+      setMessage({ type: 'error', text });
     } finally {
       setSaving(false);
     }
+  };
+
+  const addStage = () => {
+    const maxStage = stages.reduce((acc, item) => Math.max(acc, item.stage), 0);
+    const nextStage = Math.max(1, maxStage + 1);
+    setStages([
+      ...stages,
+      {
+        ...DEFAULT_STAGE,
+        id: genId(),
+        stage: nextStage,
+        afterHours: nextStage === 1 ? 24 : nextStage * 24,
+      },
+    ]);
+  };
+
+  const updateStage = (id: string, patch: Partial<StageForm>) => {
+    setStages((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const removeStage = (id: string) => {
+    setStages((prev) => prev.filter((item) => item.id !== id));
   };
 
   if (loading) {
@@ -356,6 +497,120 @@ export default function FollowupConfigPage() {
           <label className="text-sm text-gray-700">Stability<input type="number" min={0} max={1} step={0.01} value={ai.audioStability} onChange={(e) => setAi({ ...ai, audioStability: clampFloat(Number(e.target.value), 0, 1, 0.45) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
           <label className="text-sm text-gray-700">Similarity<input type="number" min={0} max={1} step={0.01} value={ai.audioSimilarityBoost} onChange={(e) => setAi({ ...ai, audioSimilarityBoost: clampFloat(Number(e.target.value), 0, 1, 0.7) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" /></label>
         </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Stages (24h+)</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Configure os disparos por estágio fora da janela de 24h (template) ou em sessão.
+            </p>
+          </div>
+          <button
+            onClick={addStage}
+            className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+          >
+            <Plus className="w-4 h-4" />
+            Adicionar stage
+          </button>
+        </div>
+
+        {stages.length === 0 ? (
+          <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded-lg p-4">
+            Nenhum stage configurado. Adicione ao menos um stage para templates pós-24h.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {stages.map((stage) => (
+              <div key={stage.id} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-medium text-gray-900">Stage {stage.stage}</h3>
+                  <button
+                    onClick={() => removeStage(stage.id)}
+                    className="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Remover
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <label className="text-sm text-gray-700">
+                    Stage
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={stage.stage}
+                      onChange={(e) => updateStage(stage.id, { stage: clampInt(Number(e.target.value), 1, 99) })}
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    After hours
+                    <input
+                      type="number"
+                      min={0}
+                      max={720}
+                      value={stage.afterHours}
+                      onChange={(e) => updateStage(stage.id, { afterHours: Math.max(0, clampInt(Number(e.target.value), 0, 720)) })}
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    Mode
+                    <select
+                      value={stage.mode}
+                      onChange={(e) => updateStage(stage.id, { mode: normalizeStageMode(e.target.value) })}
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                    >
+                      <option value="template">template</option>
+                      <option value="session">session</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    Language code
+                    <input
+                      value={stage.languageCode}
+                      onChange={(e) => updateStage(stage.id, { languageCode: e.target.value })}
+                      placeholder="pt_BR"
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700 md:col-span-2">
+                    Template name
+                    <input
+                      value={stage.templateName}
+                      onChange={(e) => updateStage(stage.id, { templateName: e.target.value })}
+                      placeholder="followup_24h"
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700 md:col-span-2">
+                    Texto (modo session)
+                    <input
+                      value={stage.text}
+                      onChange={(e) => updateStage(stage.id, { text: e.target.value })}
+                      placeholder="Mensagem opcional para session"
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white"
+                    />
+                  </label>
+                  <label className="text-sm text-gray-700 md:col-span-4">
+                    Components (JSON)
+                    <textarea
+                      value={stage.componentsText}
+                      onChange={(e) => updateStage(stage.id, { componentsText: e.target.value })}
+                      rows={3}
+                      className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white font-mono text-xs"
+                      placeholder='[]'
+                    />
+                  </label>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
