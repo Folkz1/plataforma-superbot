@@ -1,6 +1,7 @@
 """
 Updated Conversations API with real PostgreSQL queries (Async version)
 """
+import logging
 import httpx
 import uuid as uuid_mod
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,8 @@ from app.db.database import get_db
 from app.db.models import DashboardUser, Client, ConversationEvent, ConversationState, Contact, Channel
 from app.api.routes.auth import get_current_user
 from app.core.tenancy import resolve_project_id_for_user, resolve_project_id_from_client_id
+
+logger = logging.getLogger("superbot.conversations")
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -35,7 +38,41 @@ def extract_text_from_raw(raw_payload: dict | None, text: str | None) -> str | N
             caption = sent.get("caption")
             return caption or f"[{sent_type}]"
 
-        entry = raw_payload.get("entry", [{}])[0]
+        # --- channel_router outgoing format: { model: "...", tool: ... } ---
+        if "model" in raw_payload and "entry" not in raw_payload:
+            return None  # AI response, text is in the text column
+
+        # --- channel_router incoming format: { page_id: "...", raw: {...} } ---
+        raw_inner = raw_payload.get("raw")
+        if isinstance(raw_inner, dict):
+            # IG/Messenger: raw contains the messaging-level object
+            msg = raw_inner.get("message")
+            if isinstance(msg, dict):
+                t = msg.get("text")
+                if t:
+                    return t
+                attachments = msg.get("attachments", [])
+                if attachments:
+                    att_type = attachments[0].get("type", "attachment")
+                    return f"[{att_type}]"
+                if msg.get("reply_to", {}).get("story"):
+                    return "[Resposta a story]"
+            # WhatsApp: raw contains the message-level object
+            wa_type = raw_inner.get("type")
+            if wa_type == "text":
+                return raw_inner.get("text", {}).get("body")
+            if wa_type in ("image", "video", "audio", "document", "sticker"):
+                caption = raw_inner.get(wa_type, {}).get("caption")
+                return caption or f"[{wa_type}]"
+            if wa_type == "interactive":
+                return raw_inner.get("interactive", {}).get("button_reply", {}).get("title") or "[interativo]"
+            if wa_type:
+                return f"[{wa_type}]"
+
+        entries = raw_payload.get("entry")
+        if not isinstance(entries, list) or len(entries) == 0:
+            return None
+        entry = entries[0]
 
         # --- WhatsApp format: entry[0].changes[0].value.messages[0] ---
         changes = entry.get("changes", [])
@@ -60,15 +97,16 @@ def extract_text_from_raw(raw_payload: dict | None, text: str | None) -> str | N
                 if msg_type == "interactive":
                     return wa_msg.get("interactive", {}).get("button_reply", {}).get("title") or "[interativo]"
                 return f"[{msg_type}]" if msg_type else None
-            # Status webhooks (delivery receipts) have no messages
             statuses = value.get("statuses", [])
             if statuses:
                 return None  # Delivery receipt, no text
 
         # --- Messenger/Instagram format: entry[0].messaging[0] ---
-        messaging = entry.get("messaging", [{}])[0]
+        messaging_list = entry.get("messaging")
+        if not isinstance(messaging_list, list) or len(messaging_list) == 0:
+            return None
+        messaging = messaging_list[0]
 
-        # Read receipts / delivery receipts / echoes — no user content
         if "read" in messaging or "delivery" in messaging:
             return None
 
@@ -83,7 +121,6 @@ def extract_text_from_raw(raw_payload: dict | None, text: str | None) -> str | N
             if attachments:
                 att_type = attachments[0].get("type", "attachment")
                 return f"[{att_type}]"
-            # Message exists but no text/attachments (e.g. reactions, unsupported)
             return None
 
         postback = messaging.get("postback")
@@ -93,7 +130,7 @@ def extract_text_from_raw(raw_payload: dict | None, text: str | None) -> str | N
         referral = messaging.get("referral")
         if referral:
             return "[referral]"
-    except (IndexError, KeyError, TypeError):
+    except (IndexError, KeyError, TypeError, AttributeError):
         pass
     return None
 
@@ -139,18 +176,23 @@ def _is_meta_echo_event(event: ConversationEvent) -> bool:
     if event.channel_type not in ("instagram", "messenger"):
         return False
 
-    raw = event.raw_payload if isinstance(event.raw_payload, dict) else {}
-    meta = event.metadata_json if isinstance(event.metadata_json, dict) else {}
+    try:
+        raw = event.raw_payload if isinstance(event.raw_payload, dict) else {}
+        meta = event.metadata_json if isinstance(event.metadata_json, dict) else {}
 
-    raw_echo = (
-        raw.get("entry", [{}])[0]
-        .get("messaging", [{}])[0]
-        .get("message", {})
-        .get("is_echo")
-    )
-    meta_echo = meta.get("is_echo")
+        # Check raw_payload: entry[0].messaging[0].message.is_echo
+        raw_echo = None
+        entries = raw.get("entry")
+        if isinstance(entries, list) and len(entries) > 0:
+            messaging_list = entries[0].get("messaging")
+            if isinstance(messaging_list, list) and len(messaging_list) > 0:
+                raw_echo = messaging_list[0].get("message", {}).get("is_echo")
 
-    return str(raw_echo).lower() == "true" or str(meta_echo).lower() == "true"
+        meta_echo = meta.get("is_echo")
+
+        return str(raw_echo).lower() == "true" or str(meta_echo).lower() == "true"
+    except (IndexError, KeyError, TypeError, AttributeError):
+        return False
 
 
 # ==================== Schemas ====================
@@ -254,11 +296,24 @@ async def _get_last_text_fallback(
     """Get last_text from the most recent event's raw_payload if last_text is empty."""
     if conv.last_text:
         return conv.last_text
+    # Try with channel_type first
     result = await db.execute(
         select(ConversationEvent.text, ConversationEvent.raw_payload).where(
             and_(
                 ConversationEvent.project_id == conv.project_id,
                 ConversationEvent.channel_type == conv.channel_type,
+                ConversationEvent.conversation_id == conv.conversation_id,
+            )
+        ).order_by(desc(ConversationEvent.created_at)).limit(1)
+    )
+    row = result.first()
+    if row:
+        return extract_text_from_raw(row[1], row[0])
+    # Fallback: try without channel_type filter
+    result = await db.execute(
+        select(ConversationEvent.text, ConversationEvent.raw_payload).where(
+            and_(
+                ConversationEvent.project_id == conv.project_id,
                 ConversationEvent.conversation_id == conv.conversation_id,
             )
         ).order_by(desc(ConversationEvent.created_at)).limit(1)
@@ -373,7 +428,7 @@ async def list_conversations(
     # Build response
     conv_list = []
     for conv in conversations:
-        # Message count
+        # Message count (with fallback: try with channel_type first, then without)
         msg_count_query = select(func.count(ConversationEvent.id)).where(
             and_(
                 ConversationEvent.project_id == conv.project_id,
@@ -383,6 +438,17 @@ async def list_conversations(
         )
         msg_result = await db.execute(msg_count_query)
         msg_count = msg_result.scalar() or 0
+
+        # Fallback: count without channel_type filter
+        if msg_count == 0:
+            fallback_query = select(func.count(ConversationEvent.id)).where(
+                and_(
+                    ConversationEvent.project_id == conv.project_id,
+                    ConversationEvent.conversation_id == conv.conversation_id,
+                )
+            )
+            fb_result = await db.execute(fallback_query)
+            msg_count = fb_result.scalar() or 0
 
         # Resolve contact name
         raw_name = names.get(conv.conversation_id)
@@ -457,80 +523,108 @@ async def get_conversation(
     contact_name = format_contact_display(conversation_id, state.channel_type, raw_name)
 
     # Get all events/messages
-    events_query = select(ConversationEvent).where(
-        and_(
+    def _build_events_query(with_channel_type: bool = True):
+        filters = [
             ConversationEvent.project_id == project_uuid,
-            ConversationEvent.channel_type == state.channel_type,
-            ConversationEvent.conversation_id == conversation_id
-        )
-    )
+            ConversationEvent.conversation_id == conversation_id,
+        ]
+        if with_channel_type:
+            filters.append(ConversationEvent.channel_type == state.channel_type)
 
-    # Stable chronological ordering:
-    # - `event_created_at` is the canonical timeline timestamp (payload-derived).
-    # - Fallback to `created_at`.
-    # - In Postgres, `ctid` gives deterministic tie-break on timestamp ties.
-    # - In non-Postgres environments, fallback to UUID `id`.
-    dialect_name = ""
-    try:
-        bind = db.get_bind()
-        if bind is not None and getattr(bind, "dialect", None) is not None:
-            dialect_name = (bind.dialect.name or "").lower()
-    except Exception:
+        q = select(ConversationEvent).where(and_(*filters))
+
+        # Stable chronological ordering
         dialect_name = ""
+        try:
+            bind = db.get_bind()
+            if bind is not None and getattr(bind, "dialect", None) is not None:
+                dialect_name = (bind.dialect.name or "").lower()
+        except Exception:
+            dialect_name = ""
 
-    if dialect_name == "postgresql":
-        events_query = events_query.order_by(
-            sa_text("COALESCE(event_created_at, created_at)"),
-            sa_text("ctid"),
-        )
-    else:
-        events_query = events_query.order_by(
-            func.coalesce(ConversationEvent.event_created_at, ConversationEvent.created_at),
-            ConversationEvent.id,
-        )
+        if dialect_name == "postgresql":
+            q = q.order_by(
+                sa_text("COALESCE(event_created_at, created_at)"),
+                sa_text("ctid"),
+            )
+        else:
+            q = q.order_by(
+                func.coalesce(ConversationEvent.event_created_at, ConversationEvent.created_at),
+                ConversationEvent.id,
+            )
+        return q
 
-    result = await db.execute(events_query)
+    result = await db.execute(_build_events_query(with_channel_type=True))
     events = result.scalars().all()
+
+    # Fallback: if no events found with channel_type filter, try without it
+    if not events:
+        logger.warning(
+            f"No events for conversation={conversation_id} with channel_type={state.channel_type}, "
+            f"retrying without channel_type filter"
+        )
+        result = await db.execute(_build_events_query(with_channel_type=False))
+        events = result.scalars().all()
+        if events:
+            logger.info(
+                f"Found {len(events)} events without channel_type filter. "
+                f"Event channel_types: {set(e.channel_type for e in events)}"
+            )
 
     # Format messages (extract text from raw_payload when missing)
     # Filter out only true delivery/read receipts (no content at all)
     messages = []
     for event in events:
-        # Ignore Meta echo reflections to avoid duplicated outbound messages in UI.
-        if _is_meta_echo_event(event):
-            continue
-
-        text = extract_text_from_raw(event.raw_payload, event.text)
-
-        # Skip only confirmed read/delivery receipts with zero content
-        if text is None and not event.media and event.direction == "in":
-            raw = event.raw_payload if isinstance(event.raw_payload, dict) else {}
-            # Check if this is truly a delivery/read receipt
-            is_receipt = False
-            try:
-                entry = raw.get("entry", [{}])[0]
-                # WhatsApp: statuses array = delivery receipt
-                changes = entry.get("changes", [])
-                if changes and changes[0].get("value", {}).get("statuses"):
-                    is_receipt = True
-                # Messenger/IG: read or delivery keys
-                messaging = entry.get("messaging", [{}])[0]
-                if "read" in messaging or "delivery" in messaging:
-                    is_receipt = True
-            except (IndexError, KeyError, TypeError):
-                pass
-            if is_receipt:
+        try:
+            # Ignore Meta echo reflections to avoid duplicated outbound messages in UI.
+            if _is_meta_echo_event(event):
                 continue
 
-        messages.append({
-            "id": str(event.id),
-            "direction": event.direction,
-            "message_type": event.message_type,
-            "text": text,
-            "media": event.media,
-            "raw_payload": event.raw_payload,
-            "created_at": event.event_created_at or event.created_at
-        })
+            text = extract_text_from_raw(event.raw_payload, event.text)
+
+            # Skip only confirmed read/delivery receipts with zero content
+            if text is None and not event.media and event.direction == "in":
+                raw = event.raw_payload if isinstance(event.raw_payload, dict) else {}
+                is_receipt = False
+                try:
+                    entries = raw.get("entry")
+                    if isinstance(entries, list) and len(entries) > 0:
+                        entry = entries[0]
+                        # WhatsApp: statuses array = delivery receipt
+                        changes = entry.get("changes", [])
+                        if changes and changes[0].get("value", {}).get("statuses"):
+                            is_receipt = True
+                        # Messenger/IG: read or delivery keys
+                        messaging_list = entry.get("messaging")
+                        if isinstance(messaging_list, list) and len(messaging_list) > 0:
+                            if "read" in messaging_list[0] or "delivery" in messaging_list[0]:
+                                is_receipt = True
+                except (IndexError, KeyError, TypeError):
+                    pass
+                if is_receipt:
+                    continue
+
+            messages.append({
+                "id": str(event.id),
+                "direction": event.direction or "in",
+                "message_type": event.message_type or "text",
+                "text": text,
+                "media": event.media,
+                "raw_payload": event.raw_payload,
+                "created_at": event.event_created_at or event.created_at or datetime.now(timezone.utc)
+            })
+        except Exception as exc:
+            logger.error(f"Error processing event {event.id}: {exc}", exc_info=True)
+            # Still include the event with minimal data rather than dropping it
+            messages.append({
+                "id": str(event.id),
+                "direction": event.direction or "in",
+                "message_type": event.message_type or "text",
+                "text": event.text or "[erro ao processar mensagem]",
+                "media": event.media,
+                "raw_payload": event.raw_payload,
+                "created_at": event.event_created_at or event.created_at or datetime.now(timezone.utc)
+            })
 
     return {
         "project_id": str(state.project_id),
@@ -838,10 +932,29 @@ async def transfer_to_human(
     contact_result = await db.execute(
         select(Contact.name).where(Contact.id == conversation_id)
     )
-    contact_name = contact_result.scalars().first() or conversation_id
+    raw_name = contact_result.scalars().first()
+    if not raw_name:
+        # Try WhatsApp profile name from raw_payload
+        evt_result = await db.execute(
+            select(ConversationEvent.raw_payload).where(
+                and_(
+                    ConversationEvent.project_id == project_uuid,
+                    ConversationEvent.conversation_id == conversation_id,
+                    ConversationEvent.direction == "in",
+                )
+            ).limit(1)
+        )
+        raw = evt_result.scalar_one_or_none()
+        raw_name = extract_contact_name_from_raw(raw)
 
     # Get channel credentials
     ch_type = state.channel_type or "whatsapp"
+
+    # Build display name and identifier for N8N
+    contact_display = format_contact_display(conversation_id, ch_type, raw_name)
+    # For IG/Messenger, include channel info in the N8N payload
+    channel_label = {"instagram": "Instagram", "messenger": "Messenger"}.get(ch_type, "WhatsApp")
+
     channel = (await db.execute(
         select(Channel).where(
             and_(
@@ -862,9 +975,10 @@ async def transfer_to_human(
                 json={
                     "project_id": str(project_uuid),
                     "customer_phone": conversation_id,
-                    "customer_name": contact_name,
+                    "customer_name": contact_display,
+                    "channel_type": ch_type,
                     "reason": body.reason or "Transferido pelo dashboard",
-                    "summary": f"Conversa via {ch_type} transferida por {current_user.name or current_user.email}",
+                    "summary": f"Conversa via {channel_label} com {contact_display} transferida por {current_user.name or current_user.email}",
                 }
             )
             n8n_notified = True
