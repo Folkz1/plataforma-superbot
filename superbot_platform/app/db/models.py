@@ -203,6 +203,26 @@ class ProjectSecrets(Base):
     feedback_config = Column(JSON, default=dict)
 
 
+class Agent(Base):
+    """Agente IA configurável por projeto."""
+    __tablename__ = "agents"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    system_prompt = Column(Text, nullable=False, default="")
+    llm_model = Column(Text, nullable=False, default="gemini-2.0-flash")
+    first_message = Column(Text, default="")
+    voice_id = Column(Text)
+    send_audio = Column(Boolean, default=False)
+    rag_store_id = Column(Text)
+    settings = Column(JSON, default=dict)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ProjectVoiceAgent(Base):
     """Agente de voz ElevenLabs vinculado a um projeto."""
     __tablename__ = "project_voice_agents"
@@ -376,6 +396,75 @@ class Session(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("DashboardUser", back_populates="sessions")
+
+
+# =====================================================
+# Pipeline de Vendas
+# =====================================================
+
+class SalesTeamMember(Base):
+    """Membro da equipe de vendas/atendimento."""
+    __tablename__ = "sales_team_members"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("dashboard_users.id", ondelete="CASCADE"), nullable=False)
+    role = Column(Text, nullable=False, default="vendedor")
+    max_concurrent_conversations = Column(Integer, default=10)
+    is_available = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PipelineStage(Base):
+    """Etapa customizável do pipeline de vendas."""
+    __tablename__ = "pipeline_stages"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    slug = Column(Text, nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    color = Column(Text, default="#6366f1")
+    auto_assign = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConversationAssignment(Base):
+    """Atribuição de conversa a vendedor com etapa do pipeline."""
+    __tablename__ = "conversation_assignments"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    conversation_id = Column(Text, nullable=False)
+    channel_type = Column(Text, nullable=False)
+    assigned_to = Column(Uuid(as_uuid=True), ForeignKey("sales_team_members.id"))
+    assigned_by = Column(Uuid(as_uuid=True), ForeignKey("dashboard_users.id"))
+    pipeline_stage_id = Column(Uuid(as_uuid=True), ForeignKey("pipeline_stages.id"))
+    status = Column(Text, default="active")
+    notes = Column(Text)
+    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))
+
+
+class HandoffHistory(Base):
+    """Histórico de handoffs entre bot, vendedores e gerentes."""
+    __tablename__ = "handoff_history"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    conversation_id = Column(Text, nullable=False)
+    channel_type = Column(Text, nullable=False)
+    from_type = Column(Text, nullable=False)
+    from_id = Column(Uuid(as_uuid=True))
+    to_type = Column(Text, nullable=False)
+    to_id = Column(Uuid(as_uuid=True))
+    reason = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class VoiceCallHistory(Base):

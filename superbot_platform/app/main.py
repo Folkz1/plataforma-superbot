@@ -19,6 +19,10 @@ from app.api.routes import (
     elevenlabs as elevenlabs_routes,
     live as live_routes,
     users as users_routes,
+    webhook as webhook_routes,
+    agents as agents_routes,
+    pipeline as pipeline_routes,
+    onboarding as onboarding_routes,
 )
 
 
@@ -71,6 +75,10 @@ app.include_router(rag_routes.router)
 app.include_router(elevenlabs_routes.router)
 app.include_router(live_routes.router)
 app.include_router(users_routes.router)
+app.include_router(webhook_routes.router)
+app.include_router(agents_routes.router)
+app.include_router(pipeline_routes.router)
+app.include_router(onboarding_routes.router)
 
 
 # ==================== Health ====================

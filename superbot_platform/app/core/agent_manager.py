@@ -1,399 +1,361 @@
 """
 SuperBot Platform - Gerenciador de Agentes
+CRUD real no banco de dados (tabela agents + project_tools_knowledge + project_knowledge_base)
 """
+import json
+import logging
 from typing import Optional
-from uuid import uuid4
+from uuid import UUID
+
+from sqlalchemy import text as sa_text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.integrations.gemini import GeminiClient, GeminiRAGManager
+
+logger = logging.getLogger("superbot.agent_manager")
 
 
 class AgentManager:
     """
     Gerenciador de agentes da plataforma.
-    
+
     Responsável por:
-    - CRUD de agentes
-    - Configuração de tools/webhooks
-    - Conexão de canais
-    - Gerenciamento de RAG
+    - CRUD de agentes (tabela agents)
+    - Configuração de tools/webhooks (project_tools_knowledge)
+    - Gerenciamento de RAG (project_knowledge_base + Gemini FileSearch)
     """
-    
-    def __init__(self, db, gemini_client, rag_manager, elevenlabs_manager):
+
+    def __init__(self, db: AsyncSession, gemini_client: GeminiClient = None, rag_manager: GeminiRAGManager = None):
         self.db = db
         self.gemini = gemini_client
         self.rag = rag_manager
-        self.elevenlabs = elevenlabs_manager
-    
+
     # ==================== Agentes ====================
-    
+
     async def create_agent(
         self,
+        project_id: str,
         name: str,
         system_prompt: str,
-        voice_id: str = None,
-        first_message: str = "",
         llm_model: str = "gemini-2.0-flash",
+        first_message: str = "",
+        voice_id: str = None,
         send_audio: bool = False,
         settings: dict = None
     ) -> dict:
-        """
-        Cria um novo agente.
-        
-        Args:
-            name: Nome do agente
-            system_prompt: Prompt do sistema
-            voice_id: ID da voz no ElevenLabs (opcional)
-            first_message: Mensagem inicial
-            llm_model: Modelo LLM a usar
-            send_audio: Se deve enviar respostas em áudio
-            settings: Configurações adicionais
-        
-        Returns:
-            dict com id e dados do agente
-        """
-        agent_id = str(uuid4())
-        
-        agent = {
-            "id": agent_id,
-            "name": name,
-            "system_prompt": system_prompt,
-            "voice_id": voice_id,
-            "first_message": first_message,
-            "llm_model": llm_model,
-            "send_audio": send_audio,
-            "rag_store_id": None,
-            "settings": settings or {}
-        }
-        
-        # TODO: Salvar no banco
-        # await self.db.create_agent(agent)
-        
-        return agent
-    
+        """Cria um novo agente vinculado a um projeto."""
+        # Desativa agentes existentes do projeto (apenas 1 ativo por vez)
+        await self.db.execute(
+            sa_text("""
+                UPDATE agents SET is_active = false, updated_at = now()
+                WHERE project_id = :pid AND is_active = true
+            """),
+            {"pid": project_id}
+        )
+
+        result = await self.db.execute(
+            sa_text("""
+                INSERT INTO agents
+                    (project_id, name, system_prompt, llm_model,
+                     first_message, voice_id, send_audio, settings, is_active)
+                VALUES
+                    (:pid::uuid, :name, :prompt, :model,
+                     :first_msg, :voice, :audio, :settings::jsonb, true)
+                RETURNING id, project_id, name, system_prompt, llm_model,
+                          first_message, voice_id, send_audio, rag_store_id,
+                          settings, is_active, created_at, updated_at
+            """),
+            {
+                "pid": project_id,
+                "name": name,
+                "prompt": system_prompt,
+                "model": llm_model,
+                "first_msg": first_message,
+                "voice": voice_id,
+                "audio": send_audio,
+                "settings": json.dumps(settings or {})
+            }
+        )
+        row = result.mappings().first()
+        return dict(row) if row else {}
+
     async def get_agent(self, agent_id: str) -> Optional[dict]:
         """Busca um agente pelo ID."""
-        # TODO: Buscar no banco
-        return None
-    
-    async def list_agents(self) -> list:
-        """Lista todos os agentes."""
-        # TODO: Buscar no banco
-        return []
-    
-    async def update_agent(self, agent_id: str, updates: dict) -> dict:
+        result = await self.db.execute(
+            sa_text("""
+                SELECT id, project_id, name, system_prompt, llm_model,
+                       first_message, voice_id, send_audio, rag_store_id,
+                       settings, is_active, created_at, updated_at
+                FROM agents WHERE id = :aid::uuid
+            """),
+            {"aid": agent_id}
+        )
+        row = result.mappings().first()
+        return dict(row) if row else None
+
+    async def get_active_agent_for_project(self, project_id: str) -> Optional[dict]:
+        """Busca o agente ativo de um projeto."""
+        result = await self.db.execute(
+            sa_text("""
+                SELECT id, project_id, name, system_prompt, llm_model,
+                       first_message, voice_id, send_audio, rag_store_id,
+                       settings, is_active, created_at, updated_at
+                FROM agents
+                WHERE project_id = :pid::uuid AND is_active = true
+                LIMIT 1
+            """),
+            {"pid": project_id}
+        )
+        row = result.mappings().first()
+        return dict(row) if row else None
+
+    async def list_agents(self, project_id: str) -> list:
+        """Lista todos os agentes de um projeto."""
+        result = await self.db.execute(
+            sa_text("""
+                SELECT id, project_id, name, system_prompt, llm_model,
+                       first_message, voice_id, send_audio, rag_store_id,
+                       settings, is_active, created_at, updated_at
+                FROM agents
+                WHERE project_id = :pid::uuid
+                ORDER BY is_active DESC, created_at DESC
+            """),
+            {"pid": project_id}
+        )
+        return [dict(r) for r in result.mappings().all()]
+
+    async def update_agent(self, agent_id: str, updates: dict) -> Optional[dict]:
         """Atualiza um agente."""
-        # TODO: Atualizar no banco
-        return {"id": agent_id, **updates}
-    
+        allowed_fields = {
+            "name", "system_prompt", "llm_model", "first_message",
+            "voice_id", "send_audio", "rag_store_id", "settings", "is_active"
+        }
+
+        set_clauses = []
+        params = {"aid": agent_id}
+
+        for key, value in updates.items():
+            if key not in allowed_fields:
+                continue
+            if key == "settings":
+                set_clauses.append(f"settings = :{key}::jsonb")
+                params[key] = json.dumps(value)
+            elif key == "send_audio" or key == "is_active":
+                set_clauses.append(f"{key} = :{key}")
+                params[key] = bool(value)
+            else:
+                set_clauses.append(f"{key} = :{key}")
+                params[key] = value
+
+        if not set_clauses:
+            return await self.get_agent(agent_id)
+
+        # If activating this agent, deactivate others in the same project
+        if updates.get("is_active") is True:
+            agent = await self.get_agent(agent_id)
+            if agent:
+                await self.db.execute(
+                    sa_text("""
+                        UPDATE agents SET is_active = false, updated_at = now()
+                        WHERE project_id = :pid AND id != :aid::uuid AND is_active = true
+                    """),
+                    {"pid": str(agent["project_id"]), "aid": agent_id}
+                )
+
+        set_clauses.append("updated_at = now()")
+        sql = f"UPDATE agents SET {', '.join(set_clauses)} WHERE id = :aid::uuid"
+
+        await self.db.execute(sa_text(sql), params)
+        return await self.get_agent(agent_id)
+
     async def delete_agent(self, agent_id: str) -> bool:
         """Deleta um agente."""
-        # TODO: Deletar do banco
-        return True
-    
-    # ==================== Tools ====================
-    
+        result = await self.db.execute(
+            sa_text("DELETE FROM agents WHERE id = :aid::uuid RETURNING id"),
+            {"aid": agent_id}
+        )
+        return result.scalar_one_or_none() is not None
+
+    # ==================== Tools (project_tools_knowledge) ====================
+
     async def add_tool(
         self,
-        agent_id: str,
+        project_id: str,
         name: str,
         description: str,
         webhook_url: str,
         parameters: list = None
     ) -> dict:
-        """
-        Adiciona uma tool/webhook ao agente.
-        
-        Args:
-            agent_id: ID do agente
-            name: Nome da tool (será usado pelo LLM)
-            description: Descrição do que a tool faz
-            webhook_url: URL do webhook (n8n, etc)
-            parameters: Lista de parâmetros
-        
-        Returns:
-            dict com id e dados da tool
-        """
-        tool_id = str(uuid4())
-        
-        tool = {
-            "id": tool_id,
-            "agent_id": agent_id,
-            "name": name,
-            "description": description,
-            "webhook_url": webhook_url,
-            "parameters": parameters or []
-        }
-        
-        # TODO: Salvar no banco
-        
-        return tool
-    
-    async def get_agent_tools(self, agent_id: str) -> list:
-        """Lista tools de um agente."""
-        # TODO: Buscar no banco
-        return []
-    
-    async def get_agent_tools_schema(self, agent_id: str) -> list:
-        """
-        Retorna tools no formato esperado pelo LLM.
-        
-        Returns:
-            Lista de tools no formato OpenAI/Gemini
-        """
-        tools = await self.get_agent_tools(agent_id)
-        
+        """Adiciona uma tool/webhook ao projeto."""
+        # instructions = description + parameters schema
+        instructions = description
+        if parameters:
+            instructions += f"\n\nParameters: {json.dumps(parameters)}"
+
+        result = await self.db.execute(
+            sa_text("""
+                INSERT INTO project_tools_knowledge
+                    (project_id, tool_name, instructions, api_endpoint)
+                VALUES
+                    (:pid::uuid, :name, :instr, :endpoint)
+                RETURNING id, project_id, tool_name, instructions, api_endpoint, created_at
+            """),
+            {
+                "pid": project_id,
+                "name": name,
+                "instr": instructions,
+                "endpoint": webhook_url
+            }
+        )
+        row = result.mappings().first()
+        return dict(row) if row else {}
+
+    async def get_agent_tools(self, project_id: str) -> list:
+        """Lista tools de um projeto."""
+        result = await self.db.execute(
+            sa_text("""
+                SELECT id, project_id, tool_name, instructions, api_endpoint, created_at
+                FROM project_tools_knowledge
+                WHERE project_id = :pid::uuid
+                ORDER BY created_at ASC
+            """),
+            {"pid": project_id}
+        )
+        return [dict(r) for r in result.mappings().all()]
+
+    async def get_agent_tools_schema(self, project_id: str) -> list:
+        """Retorna tools no formato esperado pelo LLM (function calling)."""
+        tools = await self.get_agent_tools(project_id)
+
         schema = []
         for tool in tools:
-            properties = {}
-            required = []
-            
-            for param in tool.get("parameters", []):
-                properties[param["name"]] = {
-                    "type": param.get("type", "string"),
-                    "description": param.get("description", "")
-                }
-                if param.get("required", False):
-                    required.append(param["name"])
-            
             schema.append({
-                "name": tool["name"],
-                "description": tool["description"],
+                "name": tool["tool_name"],
+                "description": tool["instructions"] or "",
                 "parameters": {
                     "type": "object",
-                    "properties": properties,
-                    "required": required
+                    "properties": {
+                        "data": {
+                            "type": "string",
+                            "description": "JSON data to send to the tool"
+                        }
+                    },
+                    "required": []
                 }
             })
-        
         return schema
-    
-    async def remove_tool(self, agent_id: str, tool_id: str) -> bool:
-        """Remove uma tool do agente."""
-        # TODO: Deletar do banco
-        return True
-    
-    # ==================== Canais ====================
-    
-    async def connect_channel(
+
+    async def remove_tool(self, project_id: str, tool_id: str) -> bool:
+        """Remove uma tool do projeto."""
+        result = await self.db.execute(
+            sa_text("""
+                DELETE FROM project_tools_knowledge
+                WHERE id = :tid::uuid AND project_id = :pid::uuid
+                RETURNING id
+            """),
+            {"tid": tool_id, "pid": project_id}
+        )
+        return result.scalar_one_or_none() is not None
+
+    # ==================== RAG (project_knowledge_base) ====================
+
+    async def add_knowledge(
         self,
-        agent_id: str,
-        channel_type: str,
-        channel_identifier: str,
-        settings: dict = None
+        project_id: str,
+        content: str,
+        metadata: dict = None
     ) -> dict:
-        """
-        Conecta um canal ao agente.
-        
-        Args:
-            agent_id: ID do agente
-            channel_type: Tipo (whatsapp, instagram, messenger, phone)
-            channel_identifier: Identificador (phone_number_id, page_id, etc)
-            settings: Configurações específicas do canal
-        
-        Returns:
-            dict com id e dados do canal
-        """
-        channel_id = str(uuid4())
-        
-        channel = {
-            "id": channel_id,
-            "agent_id": agent_id,
-            "channel_type": channel_type,
-            "channel_identifier": channel_identifier,
-            "is_active": True,
-            "settings": settings or {}
-        }
-        
-        # TODO: Salvar no banco
-        
-        return channel
-    
-    async def list_agent_channels(self, agent_id: str) -> list:
-        """Lista canais de um agente."""
-        # TODO: Buscar no banco
-        return []
-    
-    async def disconnect_channel(self, agent_id: str, channel_id: str) -> bool:
-        """Desconecta um canal do agente."""
-        # TODO: Atualizar no banco
-        return True
-    
-    # ==================== RAG ====================
-    
-    async def setup_rag(self, agent_id: str, store_name: str = None) -> dict:
-        """
-        Configura RAG para o agente.
-        
-        Args:
-            agent_id: ID do agente
-            store_name: Nome do store (default: agent_id)
-        
-        Returns:
-            dict com rag_store_id
-        """
+        """Adiciona chunk de conhecimento ao projeto."""
+        result = await self.db.execute(
+            sa_text("""
+                INSERT INTO project_knowledge_base
+                    (project_id, content, metadata)
+                VALUES
+                    (:pid::uuid, :content, :meta::jsonb)
+                RETURNING id, project_id, content, metadata, created_at
+            """),
+            {
+                "pid": project_id,
+                "content": content,
+                "meta": json.dumps(metadata or {})
+            }
+        )
+        row = result.mappings().first()
+        return dict(row) if row else {}
+
+    async def list_knowledge(self, project_id: str) -> list:
+        """Lista chunks de conhecimento do projeto."""
+        result = await self.db.execute(
+            sa_text("""
+                SELECT id, project_id, content, metadata, created_at
+                FROM project_knowledge_base
+                WHERE project_id = :pid::uuid
+                ORDER BY created_at ASC
+            """),
+            {"pid": project_id}
+        )
+        return [dict(r) for r in result.mappings().all()]
+
+    async def delete_knowledge(self, project_id: str, knowledge_id: str) -> bool:
+        """Remove chunk de conhecimento."""
+        result = await self.db.execute(
+            sa_text("""
+                DELETE FROM project_knowledge_base
+                WHERE id = :kid::uuid AND project_id = :pid::uuid
+                RETURNING id
+            """),
+            {"kid": knowledge_id, "pid": project_id}
+        )
+        return result.scalar_one_or_none() is not None
+
+    # ==================== Gemini RAG FileSearch ====================
+
+    async def setup_rag_store(self, agent_id: str, store_name: str = None) -> dict:
+        """Configura RAG FileSearch store para o agente."""
+        if not self.rag:
+            return {"error": "RAG manager not configured"}
+
+        agent = await self.get_agent(agent_id)
+        if not agent:
+            return {"error": "Agent not found"}
+
         store_name = store_name or f"agent_{agent_id}"
-        
-        # Cria FileSearchStore no Gemini
         store_id = await self.rag.create_store(
             name=store_name,
-            description=f"RAG Store for agent {agent_id}"
+            description=f"RAG Store for agent {agent['name']}"
         )
-        
-        # Atualiza agente com store_id
+
         await self.update_agent(agent_id, {"rag_store_id": store_id})
-        
         return {"rag_store_id": store_id}
-    
-    async def upload_rag_document(
-        self,
-        agent_id: str,
-        file_path: str,
-        display_name: str = None
-    ) -> dict:
-        """
-        Faz upload de documento para o RAG do agente.
-        
-        Args:
-            agent_id: ID do agente
-            file_path: Caminho do arquivo
-            display_name: Nome amigável
-        
-        Returns:
-            dict com file_id e status
-        """
+
+    async def upload_rag_document(self, agent_id: str, file_path: str, display_name: str = None) -> dict:
+        """Upload documento para RAG FileSearch do agente."""
+        if not self.rag:
+            return {"error": "RAG manager not configured"}
+
         agent = await self.get_agent(agent_id)
-        
         if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        
+            return {"error": "Agent not found"}
+
         store_id = agent.get("rag_store_id")
-        
         if not store_id:
-            # Cria store se não existir
-            result = await self.setup_rag(agent_id)
-            store_id = result["rag_store_id"]
-        
-        # Upload do documento
-        return await self.rag.upload_document(
-            store_id=store_id,
-            file_path=file_path,
-            display_name=display_name
-        )
-    
-    async def upload_rag_text(
-        self,
-        agent_id: str,
-        content: str,
-        name: str = "document.txt"
-    ) -> dict:
-        """
-        Faz upload de texto direto para o RAG.
-        
-        Args:
-            agent_id: ID do agente
-            content: Conteúdo de texto
-            name: Nome do documento
-        
-        Returns:
-            dict com file_id e status
-        """
+            result = await self.setup_rag_store(agent_id)
+            store_id = result.get("rag_store_id")
+
+        return await self.rag.upload_document(store_id, file_path, display_name)
+
+    async def upload_rag_text(self, agent_id: str, content: str, name: str = "document.txt") -> dict:
+        """Upload texto para RAG FileSearch do agente."""
+        if not self.rag:
+            return {"error": "RAG manager not configured"}
+
         agent = await self.get_agent(agent_id)
-        
         if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        
+            return {"error": "Agent not found"}
+
         store_id = agent.get("rag_store_id")
-        
         if not store_id:
-            result = await self.setup_rag(agent_id)
-            store_id = result["rag_store_id"]
-        
-        return await self.rag.upload_text(
-            store_id=store_id,
-            content=content,
-            name=name
-        )
-    
-    async def query_rag(self, agent_id: str, query: str) -> dict:
-        """
-        Faz query no RAG do agente.
-        
-        Args:
-            agent_id: ID do agente
-            query: Pergunta/busca
-        
-        Returns:
-            dict com resposta e citações
-        """
-        agent = await self.get_agent(agent_id)
-        
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        
-        store_id = agent.get("rag_store_id")
-        
-        if not store_id:
-            raise ValueError(f"Agent {agent_id} has no RAG configured")
-        
-        return await self.rag.query(
-            store_id=store_id,
-            query=query
-        )
-    
-    # ==================== Migração Pacific Surf ====================
-    
-    async def import_from_elevenlabs_config(
-        self,
-        name: str,
-        system_prompt_path: str,
-        rag_content_path: str,
-        tools_config: list,
-        voice_id: str = None
-    ) -> dict:
-        """
-        Importa configuração do formato ElevenLabs existente.
-        
-        Args:
-            name: Nome do agente
-            system_prompt_path: Caminho do arquivo system.md
-            rag_content_path: Caminho do arquivo memoria_rag.md
-            tools_config: Lista de configurações de tools
-            voice_id: ID da voz no ElevenLabs
-        
-        Returns:
-            dict com agente criado
-        """
-        # Lê system prompt
-        with open(system_prompt_path, 'r', encoding='utf-8') as f:
-            system_prompt = f.read()
-        
-        # Cria agente
-        agent = await self.create_agent(
-            name=name,
-            system_prompt=system_prompt,
-            voice_id=voice_id,
-            llm_model="gemini-2.0-flash"
-        )
-        
-        # Configura RAG
-        await self.setup_rag(agent["id"])
-        
-        # Upload conteúdo RAG
-        with open(rag_content_path, 'r', encoding='utf-8') as f:
-            rag_content = f.read()
-        
-        await self.upload_rag_text(
-            agent_id=agent["id"],
-            content=rag_content,
-            name="knowledge_base.txt"
-        )
-        
-        # Adiciona tools
-        for tool_config in tools_config:
-            await self.add_tool(
-                agent_id=agent["id"],
-                name=tool_config["name"],
-                description=tool_config.get("description", ""),
-                webhook_url=tool_config["webhook_url"],
-                parameters=tool_config.get("parameters", [])
-            )
-        
-        return agent
+            result = await self.setup_rag_store(agent_id)
+            store_id = result.get("rag_store_id")
+
+        return await self.rag.upload_text(store_id, content, name)
