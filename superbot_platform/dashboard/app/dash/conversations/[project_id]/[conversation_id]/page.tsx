@@ -6,7 +6,7 @@ import { useConversation } from '@/hooks/useConversation';
 import {
   ArrowLeft, MessageCircle, User, Bot, Wrench,
   RefreshCw, Send, HandMetal, RotateCcw, Share2, Copy, Check, X,
-  AlertTriangle, Clock
+  AlertTriangle, Clock, PhoneForwarded
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getPlatformLogo } from '@/components/PlatformLogos';
@@ -90,6 +90,9 @@ export default function ConversationViewerPage() {
   const [shareModal, setShareModal] = useState(false);
   const [shareLink, setShareLink] = useState('');
   const [copied, setCopied] = useState(false);
+  const [transferModal, setTransferModal] = useState(false);
+  const [transferReason, setTransferReason] = useState('');
+  const [transferLoading, setTransferLoading] = useState(false);
 
   const selectedChannelType = searchParams.get('channel_type') || undefined;
 
@@ -142,6 +145,25 @@ export default function ConversationViewerPage() {
       setSendError(err.message);
     } finally {
       setStatusLoading(false);
+    }
+  };
+
+  const handleTransfer = async () => {
+    setTransferLoading(true);
+    setSendError(null);
+    try {
+      const channelParam = selectedChannelType ? `?channel_type=${encodeURIComponent(selectedChannelType)}` : '';
+      await api.post(
+        `/api/conversations/${params.project_id}/${params.conversation_id}/transfer${channelParam}`,
+        { reason: transferReason.trim() || undefined, timeout_hours: 8 }
+      );
+      setTransferModal(false);
+      setTransferReason('');
+      refresh();
+    } catch (err: any) {
+      setSendError(err.response?.data?.detail || 'Erro ao transferir conversa');
+    } finally {
+      setTransferLoading(false);
     }
   };
 
@@ -248,6 +270,16 @@ export default function ConversationViewerPage() {
 
               <button onClick={refresh} className="p-2 hover:bg-gray-100 rounded-lg transition" title="Atualizar">
                 <RefreshCw className="w-4 h-4 text-gray-600" />
+              </button>
+
+              <button
+                onClick={() => setTransferModal(true)}
+                disabled={statusLoading || isHandoff}
+                className="flex items-center gap-2 px-3 py-1.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm font-medium disabled:opacity-50"
+                title="Transferir para humano com notificacao WhatsApp"
+              >
+                <PhoneForwarded className="w-4 h-4" />
+                Transferir
               </button>
 
               {!isHandoff ? (
@@ -582,6 +614,49 @@ export default function ConversationViewerPage() {
           </div>
         </div>
       </div>
+
+      {/* Transfer Modal */}
+      {transferModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setTransferModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Transferir para Humano</h3>
+              <button onClick={() => setTransferModal(false)} className="p-1 hover:bg-gray-100 rounded">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              A conversa sera marcada como &quot;handoff&quot; por 8 horas e uma notificacao sera enviada via WhatsApp para o responsavel do projeto.
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Motivo (opcional)</label>
+              <input
+                type="text"
+                value={transferReason}
+                onChange={(e) => setTransferReason(e.target.value)}
+                placeholder="Ex: Cliente quer falar com gerente"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+              />
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setTransferModal(false)}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleTransfer}
+                disabled={transferLoading}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition disabled:opacity-50"
+              >
+                {transferLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <PhoneForwarded className="w-4 h-4" />}
+                Transferir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Share Modal */}
       {shareModal && (

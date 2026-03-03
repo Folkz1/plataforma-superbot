@@ -493,7 +493,7 @@ async def get_conversation(
     events = result.scalars().all()
 
     # Format messages (extract text from raw_payload when missing)
-    # Filter out events with no content (read receipts, delivery receipts)
+    # Filter out only true delivery/read receipts (no content at all)
     messages = []
     for event in events:
         # Ignore Meta echo reflections to avoid duplicated outbound messages in UI.
@@ -501,9 +501,27 @@ async def get_conversation(
             continue
 
         text = extract_text_from_raw(event.raw_payload, event.text)
-        # Skip events with no text and no media (read/delivery receipts)
-        if text is None and not event.media and event.direction == "in" and event.message_type in ("unknown", ""):
-            continue
+
+        # Skip only confirmed read/delivery receipts with zero content
+        if text is None and not event.media and event.direction == "in":
+            raw = event.raw_payload if isinstance(event.raw_payload, dict) else {}
+            # Check if this is truly a delivery/read receipt
+            is_receipt = False
+            try:
+                entry = raw.get("entry", [{}])[0]
+                # WhatsApp: statuses array = delivery receipt
+                changes = entry.get("changes", [])
+                if changes and changes[0].get("value", {}).get("statuses"):
+                    is_receipt = True
+                # Messenger/IG: read or delivery keys
+                messaging = entry.get("messaging", [{}])[0]
+                if "read" in messaging or "delivery" in messaging:
+                    is_receipt = True
+            except (IndexError, KeyError, TypeError):
+                pass
+            if is_receipt:
+                continue
+
         messages.append({
             "id": str(event.id),
             "direction": event.direction,
@@ -755,4 +773,125 @@ async def send_human_message(
         "meta_response": resp.json(),
         "status": new_status,
         "human_takeover_until": meta.get("human_takeover_until")
+    }
+
+
+# ==================== Transfer to Human ====================
+
+class TransferRequest(BaseModel):
+    reason: Optional[str] = None
+    timeout_hours: float = 8.0
+
+
+@router.post("/{project_id}/{conversation_id}/transfer")
+async def transfer_to_human(
+    project_id: str,
+    conversation_id: str,
+    body: TransferRequest,
+    channel_type: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Transfer conversation to human agent with WhatsApp notification."""
+    project_uuid, state = await _get_conversation_state(
+        project_id, conversation_id, current_user, db, channel_type
+    )
+
+    now = datetime.now(timezone.utc)
+    meta = dict(state.metadata_json or {})
+    timeout_hours = max(0.5, min(body.timeout_hours, 24))
+
+    # Set handoff status
+    meta["human_takeover_until"] = (now + timedelta(hours=timeout_hours)).isoformat()
+    meta["human_agent_name"] = current_user.name or current_user.email
+    meta["transfer_reason"] = body.reason or "Transferido pelo dashboard"
+
+    await db.execute(
+        sa_update(ConversationState).where(
+            and_(
+                ConversationState.project_id == project_uuid,
+                ConversationState.channel_type == state.channel_type,
+                ConversationState.conversation_id == conversation_id
+            )
+        ).values(
+            status="handoff",
+            metadata_json=meta,
+            updated_at=now
+        )
+    )
+
+    # Log system event
+    event = ConversationEvent(
+        id=uuid_mod.uuid4(),
+        project_id=project_uuid,
+        channel_type=state.channel_type,
+        channel_identifier=state.channel_identifier,
+        conversation_id=conversation_id,
+        direction="system",
+        message_type="status_change",
+        text=f"Transferido para humano por {current_user.name or current_user.email}" + (f": {body.reason}" if body.reason else ""),
+    )
+    db.add(event)
+    await db.commit()
+
+    # Send WhatsApp notification to notification_phone (best-effort)
+    notification_sent = False
+    try:
+        # Get project secrets for notification_phone
+        from app.db.models import ProjectSecrets
+        secret_result = await db.execute(
+            select(ProjectSecrets).where(ProjectSecrets.project_id == project_uuid)
+        )
+        secrets = secret_result.scalar_one_or_none()
+
+        notification_phone = getattr(secrets, 'notification_phone', None) if secrets else None
+
+        if notification_phone:
+            # Get WhatsApp channel for sending
+            channel = (await db.execute(
+                select(Channel).where(
+                    and_(
+                        Channel.project_id == project_uuid,
+                        Channel.channel_type == "whatsapp",
+                    )
+                ).limit(1)
+            )).scalar_one_or_none()
+
+            if channel and channel.access_token:
+                # Resolve contact name
+                contact_result = await db.execute(
+                    select(Contact.name).where(Contact.id == conversation_id)
+                )
+                contact_name = contact_result.scalars().first() or conversation_id
+
+                msg_text = (
+                    f"*Transferencia de conversa*\n\n"
+                    f"Contato: {contact_name}\n"
+                    f"Canal: {state.channel_type}\n"
+                    f"Transferido por: {current_user.name or current_user.email}\n"
+                    f"Motivo: {body.reason or 'Sem motivo informado'}\n"
+                    f"Timeout: {timeout_hours}h"
+                )
+
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(
+                        f"https://graph.facebook.com/v21.0/{channel.channel_identifier}/messages",
+                        headers={"Authorization": f"Bearer {channel.access_token}"},
+                        json={
+                            "messaging_product": "whatsapp",
+                            "recipient_type": "individual",
+                            "to": notification_phone,
+                            "type": "text",
+                            "text": {"body": msg_text}
+                        }
+                    )
+                notification_sent = True
+    except Exception:
+        pass  # Notification is best-effort
+
+    return {
+        "ok": True,
+        "status": "handoff",
+        "human_takeover_until": meta.get("human_takeover_until"),
+        "notification_sent": notification_sent
     }

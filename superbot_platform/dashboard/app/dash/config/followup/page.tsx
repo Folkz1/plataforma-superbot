@@ -336,7 +336,10 @@ export default function FollowupConfigPage() {
   };
 
   const onSave = async () => {
-    if (!tenantId) return;
+    if (!tenantId) {
+      setMessage({ type: 'error', text: 'Nenhum cliente selecionado. Volte para /admin e selecione um cliente.' });
+      return;
+    }
     setSaving(true);
     setMessage(null);
     try {
@@ -400,7 +403,10 @@ export default function FollowupConfigPage() {
       setLegacyPrompt(false);
       setMessage({ type: 'success', text: 'Configuracao salva!' });
     } catch (error) {
-      const text = error instanceof Error ? error.message : 'Erro ao salvar configuracao';
+      const err = error as { response?: { data?: { detail?: string } }; message?: string };
+      const text = error instanceof Error
+        ? error.message
+        : (err.response?.data?.detail || 'Erro ao salvar configuracao. Verifique sua conexao.');
       setMessage({ type: 'error', text });
     } finally {
       setSaving(false);
@@ -482,124 +488,150 @@ export default function FollowupConfigPage() {
 
       {activeTab === 'within_24h' && (
         <>
+          {/* Main controls - simplified */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-2">Parametros da IA (janela ate 24h)</h2>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Reengajamento (janela ate 24h)</h2>
             <p className="text-sm text-gray-500 mb-4">
-              Esta aba decide follow-ups de sessao (ate 24h), com base na analise do historico da conversa.
+              Configura follow-ups automaticos de sessao com IA, baseado no historico da conversa.
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <label className="text-sm text-gray-700">
-                Modelo
-                <input value={ai.model} onChange={(e) => setAi({ ...ai, model: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Timezone
-                <input value={ai.timezone} onChange={(e) => setAi({ ...ai, timezone: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Inicio (0-23)
-                <input type="number" min={0} max={23} value={ai.sendFromHour} onChange={(e) => setAi({ ...ai, sendFromHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Fim (0-23)
-                <input type="number" min={0} max={23} value={ai.sendUntilHour} onChange={(e) => setAi({ ...ai, sendUntilHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Inatividade (min)
-                <input type="number" min={10} value={ai.inactiveAfterMinutes} onChange={(e) => setAi({ ...ai, inactiveAfterMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Gap minimo (min)
-                <input type="number" min={10} value={ai.minGapMinutes} onChange={(e) => setAi({ ...ai, minGapMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Max tentativas
-                <input type="number" min={1} max={30} value={ai.maxAttempts} onChange={(e) => setAi({ ...ai, maxAttempts: clampInt(Number(e.target.value), 1, 30) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                History limite
-                <input type="number" min={10} max={60} value={ai.historyLimit} onChange={(e) => setAi({ ...ai, historyLimit: clampInt(Number(e.target.value), 10, 60) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Batch limite
-                <input type="number" min={1} max={200} value={ai.batchLimit} onChange={(e) => setAi({ ...ai, batchLimit: clampInt(Number(e.target.value), 1, 200) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Dry run
-                <button onClick={() => setAi({ ...ai, dryRun: !ai.dryRun })} className="mt-1 flex items-center">
-                  {ai.dryRun ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
-                </button>
-              </label>
-              <label className="text-sm text-gray-700">
-                IA habilitada
-                <button onClick={() => setAi({ ...ai, enabled: !ai.enabled })} className="mt-1 flex items-center">
+
+            <div className="space-y-5">
+              {/* Toggle: IA habilitada */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-gray-900">IA de reengajamento</span>
+                  <p className="text-xs text-gray-500">Habilita analise automatica e envio de follow-up.</p>
+                </div>
+                <button onClick={() => setAi({ ...ai, enabled: !ai.enabled })} className="flex items-center">
                   {ai.enabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
                 </button>
-              </label>
-            </div>
-          </div>
+              </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Volume2 className="w-5 h-5 text-indigo-600" />
-              <h2 className="text-lg font-semibold text-gray-900">Audio (sessao ate 24h)</h2>
-            </div>
-            <p className="text-sm text-gray-500 mb-4">
-              Um unico controle: habilitado/desabilitado. Com audio habilitado, a IA pode decidir enviar audio em qualquer tentativa.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <label className="text-sm text-gray-700">
-                Audio habilitado
-                <button onClick={() => setAi({ ...ai, audioEnabled: !ai.audioEnabled })} className="mt-1 flex items-center">
+              {/* Inactividade */}
+              <label className="block text-sm text-gray-700">
+                <span className="font-medium">Tempo de inatividade (minutos)</span>
+                <p className="text-xs text-gray-500 mb-1">Tempo sem resposta do cliente antes de disparar follow-up.</p>
+                <input type="number" min={10} max={1440} value={ai.inactiveAfterMinutes} onChange={(e) => setAi({ ...ai, inactiveAfterMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full max-w-xs px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+              </label>
+
+              {/* Toggle: Audio */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Volume2 className="w-4 h-4 text-indigo-600" />
+                  <div>
+                    <span className="text-sm font-medium text-gray-900">Enviar audio</span>
+                    <p className="text-xs text-gray-500">IA pode enviar mensagem de voz junto ao texto.</p>
+                  </div>
+                </div>
+                <button onClick={() => setAi({ ...ai, audioEnabled: !ai.audioEnabled })} className="flex items-center">
                   {ai.audioEnabled ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
                 </button>
-              </label>
-              <label className="text-sm text-gray-700">
-                Voice ID
-                <input value={ai.audioVoiceId} onChange={(e) => setAi({ ...ai, audioVoiceId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Audio model
-                <input value={ai.audioModelId} onChange={(e) => setAi({ ...ai, audioModelId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700">
-                Stability
-                <input type="number" min={0} max={1} step={0.01} value={ai.audioStability} onChange={(e) => setAi({ ...ai, audioStability: clampFloat(Number(e.target.value), 0, 1, 0.45) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
-              <label className="text-sm text-gray-700 md:col-span-2">
-                Similarity
-                <input type="number" min={0} max={1} step={0.01} value={ai.audioSimilarityBoost} onChange={(e) => setAi({ ...ai, audioSimilarityBoost: clampFloat(Number(e.target.value), 0, 1, 0.7) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
-              </label>
+              </div>
+
+              {/* Instrucoes personalizadas */}
+              <div>
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <span className="text-sm font-medium text-gray-900">Instrucoes personalizadas</span>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Regras de tom, conteudo e comportamento para o follow-up.
+                    </p>
+                  </div>
+                  <button onClick={() => setPromptCustom(DEFAULT_PROMPT_CUSTOM)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs hover:bg-gray-50">
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Restaurar
+                  </button>
+                </div>
+                {legacyPrompt && (
+                  <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
+                    Prompt legado detectado. Ao salvar, ele sera padronizado para o formato atual.
+                  </div>
+                )}
+                <textarea value={promptCustom} onChange={(e) => setPromptCustom(e.target.value)} rows={8} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900" placeholder="Instrucoes comerciais e de estilo para reengajamento ate 24h..." />
+              </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Prompt do reengajamento ate 24h</h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Este prompt e usado apenas no reengajamento dentro da janela de 24h, analisando o contexto e o historico da conversa.
-                </p>
+          {/* Advanced settings */}
+          <details className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6">
+            <summary className="cursor-pointer px-6 py-4 text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded-xl">
+              Configuracoes avancadas
+            </summary>
+            <div className="px-6 pb-6 pt-2 border-t border-gray-100">
+              <p className="text-xs text-gray-500 mb-4">
+                Ajustes finos do motor de reengajamento. Altere apenas se souber o que esta fazendo.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <label className="text-sm text-gray-700">
+                  Modelo
+                  <input value={ai.model} onChange={(e) => setAi({ ...ai, model: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Timezone
+                  <input value={ai.timezone} onChange={(e) => setAi({ ...ai, timezone: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Hora inicio (0-23)
+                  <input type="number" min={0} max={23} value={ai.sendFromHour} onChange={(e) => setAi({ ...ai, sendFromHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Hora fim (0-23)
+                  <input type="number" min={0} max={23} value={ai.sendUntilHour} onChange={(e) => setAi({ ...ai, sendUntilHour: clampInt(Number(e.target.value), 0, 23) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Gap minimo (min)
+                  <input type="number" min={10} value={ai.minGapMinutes} onChange={(e) => setAi({ ...ai, minGapMinutes: clampInt(Number(e.target.value), 10, 1440) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Max tentativas
+                  <input type="number" min={1} max={30} value={ai.maxAttempts} onChange={(e) => setAi({ ...ai, maxAttempts: clampInt(Number(e.target.value), 1, 30) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  History limite
+                  <input type="number" min={10} max={60} value={ai.historyLimit} onChange={(e) => setAi({ ...ai, historyLimit: clampInt(Number(e.target.value), 10, 60) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Batch limite
+                  <input type="number" min={1} max={200} value={ai.batchLimit} onChange={(e) => setAi({ ...ai, batchLimit: clampInt(Number(e.target.value), 1, 200) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Dry run
+                  <button onClick={() => setAi({ ...ai, dryRun: !ai.dryRun })} className="mt-1 flex items-center">
+                    {ai.dryRun ? <ToggleRight className="w-10 h-10 text-blue-600" /> : <ToggleLeft className="w-10 h-10 text-gray-400" />}
+                  </button>
+                </label>
               </div>
-              <button onClick={() => setPromptCustom(DEFAULT_PROMPT_CUSTOM)} className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
-                <RotateCcw className="w-4 h-4" />
-                Restaurar padrao
-              </button>
+
+              {/* Audio advanced */}
+              <div className="mt-6 pt-4 border-t border-gray-100">
+                <h3 className="text-sm font-medium text-gray-700 mb-3">Audio (ElevenLabs)</h3>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <label className="text-sm text-gray-700">
+                    Voice ID
+                    <input value={ai.audioVoiceId} onChange={(e) => setAi({ ...ai, audioVoiceId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    Audio model
+                    <input value={ai.audioModelId} onChange={(e) => setAi({ ...ai, audioModelId: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    Stability
+                    <input type="number" min={0} max={1} step={0.01} value={ai.audioStability} onChange={(e) => setAi({ ...ai, audioStability: clampFloat(Number(e.target.value), 0, 1, 0.45) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                  </label>
+                  <label className="text-sm text-gray-700">
+                    Similarity
+                    <input type="number" min={0} max={1} step={0.01} value={ai.audioSimilarityBoost} onChange={(e) => setAi({ ...ai, audioSimilarityBoost: clampFloat(Number(e.target.value), 0, 1, 0.7) })} className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white" />
+                  </label>
+                </div>
+              </div>
+
+              {/* Prompt preview */}
+              <details className="mt-6 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-700">Ver prompt final gerado</summary>
+                <pre className="mt-3 text-xs whitespace-pre-wrap text-gray-800">{promptPreview}</pre>
+              </details>
             </div>
-            {legacyPrompt && (
-              <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
-                Prompt legado detectado. Ao salvar, ele sera padronizado para o formato atual.
-              </div>
-            )}
-            <textarea value={promptCustom} onChange={(e) => setPromptCustom(e.target.value)} rows={12} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900" placeholder="Instrucoes comerciais e de estilo para reengajamento ate 24h..." />
-            <p className="text-xs text-gray-500 mt-2">
-              O schema de saida da IA e fixo internamente e nao e editavel nesta tela.
-            </p>
-            <details className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
-              <summary className="cursor-pointer text-sm font-medium text-gray-700">Ver prompt final gerado</summary>
-              <pre className="mt-3 text-xs whitespace-pre-wrap text-gray-800">{promptPreview}</pre>
-            </details>
-          </div>
+          </details>
         </>
       )}
 
@@ -711,7 +743,7 @@ export default function FollowupConfigPage() {
             </div>
           )}
         </div>
-        <button onClick={onSave} disabled={saving} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50">
+        <button onClick={onSave} disabled={saving || !tenantId} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           Salvar Configuracao
         </button>

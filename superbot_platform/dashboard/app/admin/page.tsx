@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import {
   Plus, Edit, Trash2, Users, BarChart3, X, Bot,
-  Link2, Copy, CheckCircle, AlertCircle, Loader2, LogOut,
-  UserPlus, Key, Eye, EyeOff
+  Link2, CheckCircle, AlertCircle, Loader2, LogOut,
+  UserPlus, Key, Eye, EyeOff, ChevronRight, ChevronLeft,
+  Rocket, MessageCircle, Cpu, UserCheck, ClipboardList
 } from 'lucide-react';
 
 interface Client {
@@ -86,6 +87,21 @@ export default function AdminDashboard() {
   const [clientUsers, setClientUsers] = useState<Record<string, any[]>>({});
   const [showPassword, setShowPassword] = useState(false);
   const [expandedUsers, setExpandedUsers] = useState<string | null>(null);
+
+  // Onboarding Wizard
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(0);
+  const [wizardSaving, setWizardSaving] = useState(false);
+  const [wizardError, setWizardError] = useState<string | null>(null);
+  const [wizardResult, setWizardResult] = useState<any>(null);
+  const [wizardData, setWizardData] = useState({
+    company_name: '', project_slug: '', client_name: '', client_slug: '',
+    timezone: 'America/Sao_Paulo',
+    channel_type: 'whatsapp', channel_identifier: '', meta_access_token: '',
+    meta_page_id: '', meta_ig_id: '',
+    agent_name: '', agent_system_prompt: '', agent_llm_model: 'gemini-2.0-flash',
+    user_name: '', user_email: '', user_password: '',
+  });
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
@@ -191,11 +207,59 @@ export default function AdminDashboard() {
       .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
   const openCreateModal = () => {
-    setEditingId(null);
-    setModalData({ ...emptyModal });
-    setActiveTab('geral');
-    setMessage(null);
-    setShowModal(true);
+    setWizardStep(0);
+    setWizardError(null);
+    setWizardResult(null);
+    setWizardData({
+      company_name: '', project_slug: '', client_name: '', client_slug: '',
+      timezone: 'America/Sao_Paulo',
+      channel_type: 'whatsapp', channel_identifier: '', meta_access_token: '',
+      meta_page_id: '', meta_ig_id: '',
+      agent_name: '', agent_system_prompt: '', agent_llm_model: 'gemini-2.0-flash',
+      user_name: '', user_email: '', user_password: '',
+    });
+    setShowWizard(true);
+  };
+
+  const handleWizardProvision = async () => {
+    setWizardSaving(true);
+    setWizardError(null);
+    try {
+      const channels: any[] = [];
+      if (wizardData.channel_identifier) {
+        channels.push({
+          channel_type: wizardData.channel_type,
+          channel_identifier: wizardData.channel_identifier,
+          access_token: wizardData.meta_access_token || '',
+        });
+      }
+      const payload: any = {
+        company_name: wizardData.company_name,
+        project_slug: wizardData.project_slug,
+        client_name: wizardData.client_name || wizardData.company_name,
+        client_slug: wizardData.client_slug || wizardData.project_slug,
+        timezone: wizardData.timezone,
+        user_email: wizardData.user_email,
+        user_password: wizardData.user_password,
+        user_name: wizardData.user_name,
+        channels,
+        seed_pipeline: true,
+      };
+      if (wizardData.agent_name) {
+        payload.agent_name = wizardData.agent_name;
+        payload.agent_system_prompt = wizardData.agent_system_prompt || undefined;
+        payload.agent_llm_model = wizardData.agent_llm_model;
+      }
+      const res = await api.post('/api/onboarding/provision', payload);
+      setWizardResult(res.data);
+      setWizardStep(5); // success step
+      await loadClients();
+      await loadAllUsers();
+    } catch (err: any) {
+      setWizardError(err.response?.data?.detail || 'Erro ao provisionar cliente');
+    } finally {
+      setWizardSaving(false);
+    }
   };
 
   const openEditModal = async (client: Client) => {
@@ -633,6 +697,278 @@ export default function AdminDashboard() {
                 {userSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                 Criar Login
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Onboarding Wizard */}
+      {showWizard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
+            {/* Wizard Header */}
+            <div className="px-6 py-4 border-b flex justify-between items-center flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <Rocket className="w-5 h-5 text-blue-600" />
+                <h3 className="text-lg font-semibold text-gray-900">Novo Cliente - Onboarding</h3>
+              </div>
+              <button onClick={() => setShowWizard(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* Steps indicator */}
+            {wizardStep < 5 && (
+              <div className="px-6 pt-4 flex items-center gap-2 flex-shrink-0">
+                {[
+                  { icon: <Users className="w-3.5 h-3.5" />, label: 'Empresa' },
+                  { icon: <MessageCircle className="w-3.5 h-3.5" />, label: 'Canal' },
+                  { icon: <Cpu className="w-3.5 h-3.5" />, label: 'Agente IA' },
+                  { icon: <UserCheck className="w-3.5 h-3.5" />, label: 'Usuario' },
+                  { icon: <ClipboardList className="w-3.5 h-3.5" />, label: 'Revisar' },
+                ].map((s, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />}
+                    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition ${
+                      i === wizardStep ? 'bg-blue-100 text-blue-700' : i < wizardStep ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {i < wizardStep ? <CheckCircle className="w-3.5 h-3.5" /> : s.icon}
+                      <span className="hidden sm:inline">{s.label}</span>
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+
+            {/* Wizard Body */}
+            <div className="px-6 py-5 overflow-y-auto flex-1">
+              {/* Step 0: Company */}
+              {wizardStep === 0 && (
+                <div className="space-y-4">
+                  <h4 className="text-base font-semibold text-gray-900">Dados da empresa</h4>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Nome da empresa</label>
+                    <input type="text" value={wizardData.company_name}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        const slug = slugify(name);
+                        setWizardData(prev => ({ ...prev, company_name: name, project_slug: slug, client_name: name, client_slug: slug }));
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="Ex: Famiglia Gianni" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Slug</label>
+                      <input type="text" value={wizardData.project_slug}
+                        onChange={(e) => setWizardData(prev => ({ ...prev, project_slug: e.target.value, client_slug: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                        placeholder="famiglia-gianni" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Timezone</label>
+                      <select value={wizardData.timezone}
+                        onChange={(e) => setWizardData(prev => ({ ...prev, timezone: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500">
+                        {timezones.map(tz => <option key={tz} value={tz}>{tz}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 1: Channel */}
+              {wizardStep === 1 && (
+                <div className="space-y-4">
+                  <h4 className="text-base font-semibold text-gray-900">Canal de comunicacao</h4>
+                  <p className="text-sm text-gray-500">Configure o canal principal. Pode pular e configurar depois.</p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de canal</label>
+                    <select value={wizardData.channel_type}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, channel_type: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500">
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="instagram">Instagram</option>
+                      <option value="messenger">Messenger</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      {wizardData.channel_type === 'whatsapp' ? 'Phone Number ID' : wizardData.channel_type === 'instagram' ? 'Instagram Account ID' : 'Page ID'}
+                    </label>
+                    <input type="text" value={wizardData.channel_identifier}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, channel_identifier: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="Ex: 123456789" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Access Token (Meta)</label>
+                    <input type="password" value={wizardData.meta_access_token}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, meta_access_token: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="EAAx..." />
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Agent */}
+              {wizardStep === 2 && (
+                <div className="space-y-4">
+                  <h4 className="text-base font-semibold text-gray-900">Agente de IA</h4>
+                  <p className="text-sm text-gray-500">Configure o bot que vai atender. Pode pular e configurar depois.</p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Nome do agente</label>
+                    <input type="text" value={wizardData.agent_name}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, agent_name: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="Ex: Giulia, Assistente Virtual" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Modelo LLM</label>
+                    <select value={wizardData.agent_llm_model}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, agent_llm_model: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500">
+                      <option value="gemini-2.0-flash">Gemini 2.0 Flash (rapido)</option>
+                      <option value="gemini-2.0-pro">Gemini 2.0 Pro (avancado)</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4o">GPT-4o</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">System Prompt</label>
+                    <textarea value={wizardData.agent_system_prompt}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, agent_system_prompt: e.target.value }))}
+                      rows={5}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 text-sm"
+                      placeholder="Voce e um assistente virtual da empresa X. Ajude os clientes com..." />
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: User */}
+              {wizardStep === 3 && (
+                <div className="space-y-4">
+                  <h4 className="text-base font-semibold text-gray-900">Primeiro usuario</h4>
+                  <p className="text-sm text-gray-500">Login para o cliente acessar o dashboard.</p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+                    <input type="text" value={wizardData.user_name}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, user_name: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="Nome do usuario" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" value={wizardData.user_email}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, user_email: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="cliente@email.com" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
+                    <input type="password" value={wizardData.user_password}
+                      onChange={(e) => setWizardData(prev => ({ ...prev, user_password: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                      placeholder="Senha segura" />
+                  </div>
+                </div>
+              )}
+
+              {/* Step 4: Review */}
+              {wizardStep === 4 && (
+                <div className="space-y-4">
+                  <h4 className="text-base font-semibold text-gray-900">Revisar e criar</h4>
+                  <div className="space-y-3">
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Empresa</p>
+                      <p className="text-sm text-gray-900">{wizardData.company_name} <code className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">{wizardData.project_slug}</code></p>
+                      <p className="text-xs text-gray-500">{wizardData.timezone}</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Canal</p>
+                      <p className="text-sm text-gray-900">{wizardData.channel_identifier ? `${wizardData.channel_type}: ${wizardData.channel_identifier}` : 'Nenhum (configurar depois)'}</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Agente IA</p>
+                      <p className="text-sm text-gray-900">{wizardData.agent_name ? `${wizardData.agent_name} (${wizardData.agent_llm_model})` : 'Nenhum (configurar depois)'}</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                      <p className="text-xs font-medium text-gray-500 uppercase mb-1">Usuario</p>
+                      <p className="text-sm text-gray-900">{wizardData.user_name} ({wizardData.user_email})</p>
+                    </div>
+                  </div>
+                  {wizardError && (
+                    <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 p-3 rounded-lg">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      {wizardError}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 5: Success */}
+              {wizardStep === 5 && wizardResult && (
+                <div className="space-y-4">
+                  <div className="text-center py-4">
+                    <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-3" />
+                    <h4 className="text-lg font-semibold text-gray-900">Cliente provisionado!</h4>
+                    <p className="text-sm text-gray-500 mt-1">{wizardResult.message || 'Tudo criado com sucesso.'}</p>
+                  </div>
+                  {wizardResult.checklist && (
+                    <div className="space-y-1.5">
+                      {wizardResult.checklist.map((item: any, i: number) => (
+                        <div key={i} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
+                          item.status === 'done' ? 'bg-green-50 text-green-700' : item.status === 'manual' ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500'
+                        }`}>
+                          {item.status === 'done' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                          <span className="flex-1">{item.step}</span>
+                          {item.detail && <span className="text-xs opacity-75">{item.detail}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Wizard Footer */}
+            <div className="px-6 py-4 border-t flex justify-between items-center flex-shrink-0">
+              <div>
+                {wizardStep > 0 && wizardStep < 5 && (
+                  <button onClick={() => setWizardStep(wizardStep - 1)}
+                    className="flex items-center gap-1 px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition">
+                    <ChevronLeft className="w-4 h-4" /> Voltar
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-3">
+                {wizardStep === 5 ? (
+                  <button onClick={() => setShowWizard(false)}
+                    className="px-6 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition">
+                    Fechar
+                  </button>
+                ) : wizardStep === 4 ? (
+                  <button onClick={handleWizardProvision} disabled={wizardSaving || !wizardData.user_email || !wizardData.user_password || !wizardData.user_name}
+                    className="flex items-center gap-2 px-6 py-2 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 transition disabled:opacity-50">
+                    {wizardSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                    Provisionar
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    {(wizardStep === 1 || wizardStep === 2) && (
+                      <button onClick={() => setWizardStep(wizardStep + 1)}
+                        className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition">
+                        Pular
+                      </button>
+                    )}
+                    <button onClick={() => setWizardStep(wizardStep + 1)}
+                      disabled={wizardStep === 0 && (!wizardData.company_name || !wizardData.project_slug)}
+                      className="flex items-center gap-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                      Proximo <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

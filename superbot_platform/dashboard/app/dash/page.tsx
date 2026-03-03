@@ -194,27 +194,17 @@ function DashboardSkeleton() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-8 space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="h-28 rounded-xl bg-slate-100" />
-            ))}
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="h-12 rounded-lg bg-slate-100 mb-3" />
-            {Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className="h-12 rounded-lg bg-slate-50 mb-2" />
-            ))}
-          </div>
+      <div className="space-y-6">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="h-28 rounded-xl bg-slate-100" />
+          ))}
         </div>
-        <div className="xl:col-span-4">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="h-6 w-40 rounded bg-slate-100 mb-4" />
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="h-16 rounded-lg bg-slate-50 mb-2" />
-            ))}
-          </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="h-12 rounded-lg bg-slate-100 mb-3" />
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div key={index} className="h-12 rounded-lg bg-slate-50 mb-2" />
+          ))}
         </div>
       </div>
     </div>
@@ -386,21 +376,6 @@ export default function DashboardPage() {
     ? overview.resolution_rate
     : computedResponseRate;
 
-  const followUps = useMemo(() => {
-    const nowMs = Date.now();
-    return enrichedLeads
-      .filter((lead) => !INACTIVE_STATUS.has(lead.status))
-      .sort((left, right) => {
-        const priorityDelta = PRIORITY_WEIGHT[left.priority] - PRIORITY_WEIGHT[right.priority];
-        if (priorityDelta !== 0) return priorityDelta;
-
-        const leftAge = left.lastEventDate ? nowMs - left.lastEventDate.getTime() : 0;
-        const rightAge = right.lastEventDate ? nowMs - right.lastEventDate.getTime() : 0;
-        return rightAge - leftAge;
-      })
-      .slice(0, 6);
-  }, [enrichedLeads]);
-
   const dateTimeFormatter = useMemo(
     () => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
     [],
@@ -414,12 +389,6 @@ export default function DashboardPage() {
     if (hours < 24) return `ha ${Math.floor(hours)}h`;
     if (hours < 48) return 'ontem';
     return `ha ${Math.floor(hours / 24)}d`;
-  };
-
-  const getFollowUpNote = (lead: EnrichedLead) => {
-    if (lead.stage === 'proposal') return 'Enviar proposta e validar decisor.';
-    if (lead.stage === 'qualified') return 'Conduzir qualificacao e confirmar dor principal.';
-    return 'Realizar primeiro retorno e confirmar canal preferido.';
   };
 
   const kpiCards = [
@@ -564,9 +533,8 @@ export default function DashboardPage() {
           {error}
         </div>
       ) : (
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-          <div className="xl:col-span-8 space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {PIPELINE_ORDER.map((stage) => (
                 <article
                   key={stage}
@@ -649,44 +617,6 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
-          </div>
-
-          <aside className="xl:col-span-4">
-            <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm xl:sticky xl:top-6">
-              <header className="mb-4">
-                <h2 className="text-base font-semibold text-gray-900">Tarefas de hoje</h2>
-                <p className="text-sm text-gray-500">Follow-ups priorizados para acelerar conversao</p>
-              </header>
-
-              {followUps.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center">
-                  <CheckCircle className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
-                  <p className="text-sm font-medium text-gray-800">Sem pendencias para hoje</p>
-                  <p className="text-xs text-gray-500 mt-1">Quando surgirem leads ativos, os seguimentos aparecem aqui.</p>
-                </div>
-              ) : (
-                <ul className="space-y-3">
-                  {followUps.map((lead) => (
-                    <li key={`${lead.channel_type}:${lead.conversation_id}`} className="rounded-xl border border-gray-100 p-3 hover:border-cyan-200 hover:bg-cyan-50/40 transition">
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{lead.contact_name}</p>
-                          <p className="text-xs text-gray-500">{STATUS_LABELS[lead.status] || lead.status}</p>
-                        </div>
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${PRIORITY_META[lead.priority].className}`}>
-                          {PRIORITY_META[lead.priority].label}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-600">{getFollowUpNote(lead)}</p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Ultimo contato: {lead.lastEventDate ? dateTimeFormatter.format(lead.lastEventDate) : '-'} ({getAgeLabel(lead.lastEventDate)})
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </aside>
         </section>
       )}
     </div>

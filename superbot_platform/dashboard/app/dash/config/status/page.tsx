@@ -52,6 +52,8 @@ export default function ConnectionStatusPage() {
   const [connections, setConnections] = useState<SourceStatus[]>([]);
   const [tenantName, setTenantName] = useState<string>('');
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState<string>('');
+  const [verifyToken, setVerifyToken] = useState<string>('');
 
   const loadConnectionStatus = useCallback(async (clientId: string) => {
     setLoading(true);
@@ -68,6 +70,12 @@ export default function ConnectionStatusPage() {
 
       const channels: ConfigChannel[] = Array.isArray(metaRes.data?.channels) ? metaRes.data.channels : [];
       const discovered: DiscoveredSource[] = Array.isArray(discoveryRes.data?.sources) ? discoveryRes.data.sources : [];
+
+      // Extract webhook info from API response
+      const webhookPath = metaRes.data?.webhook_path || metaRes.data?.project?.webhook_path || '';
+      const vToken = metaRes.data?.verify_token || metaRes.data?.project?.verify_token || '';
+      if (webhookPath) setWebhookUrl(webhookPath);
+      if (vToken) setVerifyToken(vToken);
 
       const registeredByKey = new Map<string, ConfigChannel>();
       for (const channel of channels) {
@@ -350,15 +358,18 @@ export default function ConnectionStatusPage() {
             <div>
               <label className="text-sm font-medium text-gray-700">URL</label>
               <code className="block mt-1 p-3 bg-gray-50 rounded text-sm text-gray-900">
-                https://ai.superbot.digital/webhook/meta
+                {webhookUrl || 'Nao configurado — defina webhook_path no projeto'}
               </code>
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Verify Token</label>
               <code className="block mt-1 p-3 bg-gray-50 rounded text-sm text-gray-900">
-                pacific-token
+                {verifyToken || 'Nao configurado — defina verify_token no projeto'}
               </code>
             </div>
+            <p className="text-xs text-gray-400">
+              Esses valores vem da configuracao do projeto. Edite em Config &gt; Meta para atualizar.
+            </p>
           </div>
         </div>
 

@@ -547,7 +547,7 @@ class ChannelRouter:
         return combined[:4000]
 
     async def _get_agent_tools(self, project_id) -> list:
-        """Busca tools do project_tools_knowledge formatadas para LLM."""
+        """Busca tools do project_tools_knowledge formatadas para LLM + system tools."""
         result = await self.db.execute(
             sa_text("""
                 SELECT tool_name, instructions, api_endpoint
@@ -560,7 +560,6 @@ class ChannelRouter:
 
         tools = []
         for row in rows:
-            # Parse instructions to extract parameters if possible
             tools.append({
                 "name": row["tool_name"],
                 "description": row["instructions"] or "",
@@ -576,6 +575,41 @@ class ChannelRouter:
                 }
             })
 
+        # System tools - always available
+        tools.append({
+            "name": "close_conversation",
+            "description": "Finaliza a conversa atual. Use quando o atendimento foi concluido, o cliente confirmou que nao precisa de mais nada, ou o assunto foi totalmente resolvido.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Motivo do encerramento (ex: 'Agendamento confirmado', 'Duvida resolvida')"
+                    }
+                },
+                "required": ["reason"]
+            }
+        })
+        tools.append({
+            "name": "update_lead_status",
+            "description": "Atualiza o status do lead/conversa. Use para marcar como 'waiting_customer' (aguardando resposta do cliente), 'closed' (encerrado), ou 'resolved' (resolvido com sucesso).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["open", "waiting_customer", "closed", "resolved", "do_not_contact"],
+                        "description": "Novo status da conversa"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Motivo da mudanca de status"
+                    }
+                },
+                "required": ["status", "reason"]
+            }
+        })
+
         return tools
 
     async def _execute_tool(
@@ -585,7 +619,14 @@ class ChannelRouter:
         params: dict,
         context: dict = None
     ) -> dict:
-        """Executa tool via webhook (project_tools_knowledge.api_endpoint)."""
+        """Executa tool via webhook (project_tools_knowledge.api_endpoint) ou system tool."""
+
+        # System tools - handled internally without webhook
+        if tool_name == "close_conversation":
+            return await self._system_close_conversation(project_id, params, context)
+        if tool_name == "update_lead_status":
+            return await self._system_update_lead_status(project_id, params, context)
+
         result = await self.db.execute(
             sa_text("""
                 SELECT api_endpoint FROM project_tools_knowledge
@@ -627,6 +668,73 @@ class ChannelRouter:
                     }
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
+            return {"error": str(e)}
+
+
+    async def _system_close_conversation(self, project_id, params: dict, context: dict = None) -> dict:
+        """System tool: close the current conversation."""
+        try:
+            conv_id = (context or {}).get("conversation_id") or params.get("conversation_id", "")
+            channel_type = (context or {}).get("channel_type") or params.get("channel_type", "")
+            reason = params.get("reason", "Fechado pela IA")
+
+            if not conv_id:
+                return {"error": "conversation_id not available in context"}
+
+            now = datetime.now(timezone.utc)
+            await self.db.execute(
+                sa_text("""
+                    UPDATE conversation_states
+                    SET status = 'closed', updated_at = :now,
+                        metadata_json = jsonb_set(
+                            COALESCE(metadata_json, '{}'::jsonb),
+                            '{closed_reason}',
+                            to_jsonb(:reason::text)
+                        )
+                    WHERE project_id = CAST(:pid AS uuid)
+                      AND conversation_id = :cid
+                      AND channel_type = :ctype
+                """),
+                {"pid": str(project_id), "cid": conv_id, "ctype": channel_type, "reason": reason, "now": now}
+            )
+            await self.db.commit()
+            logger.info(f"[SYSTEM_TOOL] close_conversation: {conv_id} -> closed ({reason})")
+            return {"ok": True, "status": "closed", "reason": reason}
+        except Exception as e:
+            logger.error(f"[SYSTEM_TOOL] close_conversation error: {e}")
+            return {"error": str(e)}
+
+    async def _system_update_lead_status(self, project_id, params: dict, context: dict = None) -> dict:
+        """System tool: update conversation status (open, waiting_customer, closed, etc)."""
+        try:
+            conv_id = (context or {}).get("conversation_id") or params.get("conversation_id", "")
+            channel_type = (context or {}).get("channel_type") or params.get("channel_type", "")
+            new_status = params.get("status", "")
+            reason = params.get("reason", "")
+
+            valid_statuses = {"open", "waiting_customer", "closed", "resolved", "do_not_contact"}
+            if new_status not in valid_statuses:
+                return {"error": f"Invalid status '{new_status}'. Valid: {', '.join(valid_statuses)}"}
+
+            if not conv_id:
+                return {"error": "conversation_id not available in context"}
+
+            now = datetime.now(timezone.utc)
+            await self.db.execute(
+                sa_text("""
+                    UPDATE conversation_states
+                    SET status = :status, updated_at = :now
+                    WHERE project_id = CAST(:pid AS uuid)
+                      AND conversation_id = :cid
+                      AND channel_type = :ctype
+                """),
+                {"pid": str(project_id), "cid": conv_id, "ctype": channel_type, "status": new_status, "now": now}
+            )
+            await self.db.commit()
+            logger.info(f"[SYSTEM_TOOL] update_lead_status: {conv_id} -> {new_status} ({reason})")
+            return {"ok": True, "status": new_status, "reason": reason}
+        except Exception as e:
+            logger.error(f"[SYSTEM_TOOL] update_lead_status error: {e}")
             return {"error": str(e)}
 
 
