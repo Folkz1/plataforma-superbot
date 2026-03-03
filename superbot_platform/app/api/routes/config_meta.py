@@ -265,9 +265,9 @@ async def update_meta_secrets(
               :notification_phone,
               :notification_email,
               COALESCE(:followup_enabled, false),
-              (:followup_config)::jsonb,
+              COALESCE((:followup_config)::jsonb, '{}'::jsonb),
               COALESCE(:feedback_enabled, true),
-              (:feedback_config)::jsonb,
+              COALESCE((:feedback_config)::jsonb, '{}'::jsonb),
               now(),
               now()
             )
