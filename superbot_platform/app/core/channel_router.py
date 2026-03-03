@@ -459,7 +459,7 @@ class ChannelRouter:
                     (id, project_id, channel_type, channel_identifier,
                      conversation_id, direction, message_type, text, raw_payload)
                 VALUES
-                    (gen_random_uuid(), :pid, :ct, :ci, :cid, :dir, :mt, :txt, :rp::jsonb)
+                    (gen_random_uuid(), :pid, :ct, :ci, :cid, :dir, :mt, :txt, CAST(:rp AS jsonb))
             """),
             {
                 "pid": str(project_id),
@@ -493,13 +493,13 @@ class ChannelRouter:
                      status, last_event_at, last_out_at, last_direction,
                      last_message_type, last_text, summary_short, updated_at)
                 VALUES
-                    (:pid::uuid, :ct, :cid, :ci,
-                     'open', :now::timestamptz, :now::timestamptz, 'out',
-                     'ai_reply', :txt, :summary, :now::timestamptz)
+                    (CAST(:pid AS uuid), :ct, :cid, :ci,
+                     'open', CAST(:now AS timestamptz), CAST(:now AS timestamptz), 'out',
+                     'ai_reply', :txt, :summary, CAST(:now AS timestamptz))
                 ON CONFLICT (project_id, channel_type, conversation_id)
                 DO UPDATE SET
-                    last_event_at = :now::timestamptz,
-                    last_out_at = :now::timestamptz,
+                    last_event_at = CAST(:now AS timestamptz),
+                    last_out_at = CAST(:now AS timestamptz),
                     last_direction = 'out',
                     last_message_type = 'ai_reply',
                     last_text = :txt,
@@ -508,7 +508,7 @@ class ChannelRouter:
                         WHEN conversation_states.status = 'closed' THEN 'open'
                         ELSE conversation_states.status
                     END,
-                    updated_at = :now::timestamptz
+                    updated_at = CAST(:now AS timestamptz)
             """),
             {
                 "pid": str(project_id),

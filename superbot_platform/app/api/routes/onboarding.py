@@ -109,7 +109,7 @@ async def provision_client(
     project_result = await db.execute(
         sa_text("""
             INSERT INTO projects (company_id, project_slug, webhook_path)
-            VALUES (:cid::uuid, :slug, :webhook)
+            VALUES (CAST(:cid AS uuid), :slug, :webhook)
             RETURNING id
         """),
         {"cid": company_id, "slug": body.project_slug, "webhook": webhook_path}
@@ -123,7 +123,7 @@ async def provision_client(
         ch_result = await db.execute(
             sa_text("""
                 INSERT INTO channels (project_id, channel_type, channel_identifier, access_token)
-                VALUES (:pid::uuid, :ct, :ci, :at)
+                VALUES (CAST(:pid AS uuid), :ct, :ci, :at)
                 RETURNING id
             """),
             {
@@ -144,7 +144,7 @@ async def provision_client(
                  openrouter_api_key, elevenlabs_api_key,
                  followup_enabled, feedback_enabled)
             VALUES
-                (:pid::uuid, :meta, :gemini, :openrouter, :elevenlabs, false, true)
+                (CAST(:pid AS uuid), :meta, :gemini, :openrouter, :elevenlabs, false, true)
         """),
         {
             "pid": project_id,
@@ -160,7 +160,7 @@ async def provision_client(
     client_result = await db.execute(
         sa_text("""
             INSERT INTO clients (name, slug, status, timezone, settings)
-            VALUES (:name, :slug, 'active', :tz, :settings::jsonb)
+            VALUES (:name, :slug, 'active', :tz, CAST(:settings AS jsonb))
             RETURNING id
         """),
         {
@@ -180,7 +180,7 @@ async def provision_client(
     user_result = await db.execute(
         sa_text("""
             INSERT INTO dashboard_users (email, password_hash, name, role, client_id, is_active)
-            VALUES (:email, :hash, :name, 'client', :cid::uuid, true)
+            VALUES (:email, :hash, :name, 'client', CAST(:cid AS uuid), true)
             RETURNING id
         """),
         {
@@ -204,7 +204,7 @@ async def provision_client(
         agent_result = await db.execute(
             sa_text("""
                 INSERT INTO agents (project_id, name, system_prompt, llm_model, is_active)
-                VALUES (:pid::uuid, :name, :prompt, :model, true)
+                VALUES (CAST(:pid AS uuid), :name, :prompt, :model, true)
                 RETURNING id
             """),
             {
@@ -230,7 +230,7 @@ async def provision_client(
             await db.execute(
                 sa_text("""
                     INSERT INTO pipeline_stages (project_id, name, slug, position, color)
-                    VALUES (:pid::uuid, :name, :slug, :pos, :color)
+                    VALUES (CAST(:pid AS uuid), :name, :slug, :pos, :color)
                 """),
                 {"pid": project_id, "name": name, "slug": slug, "pos": pos, "color": color}
             )
@@ -295,7 +295,7 @@ async def get_onboarding_status(
 
     # Find client
     client_result = await db.execute(
-        sa_text("SELECT id, name, slug, settings FROM clients WHERE id = :cid::uuid"),
+        sa_text("SELECT id, name, slug, settings FROM clients WHERE id = CAST(:cid AS uuid)"),
         {"cid": tenant_id}
     )
     client = client_result.mappings().first()
@@ -313,7 +313,7 @@ async def get_onboarding_status(
 
     # Project exists?
     proj = await db.execute(
-        sa_text("SELECT id, project_slug FROM projects WHERE id = :pid::uuid"),
+        sa_text("SELECT id, project_slug FROM projects WHERE id = CAST(:pid AS uuid)"),
         {"pid": project_id}
     )
     proj_row = proj.mappings().first()
@@ -325,7 +325,7 @@ async def get_onboarding_status(
 
     # Channels?
     ch_count = await db.execute(
-        sa_text("SELECT COUNT(*) FROM channels WHERE project_id = :pid::uuid"),
+        sa_text("SELECT COUNT(*) FROM channels WHERE project_id = CAST(:pid AS uuid)"),
         {"pid": project_id}
     )
     n_channels = ch_count.scalar() or 0
@@ -337,7 +337,7 @@ async def get_onboarding_status(
 
     # Secrets?
     sec = await db.execute(
-        sa_text("SELECT meta_master_token, gemini_api_key FROM project_secrets WHERE project_id = :pid::uuid"),
+        sa_text("SELECT meta_master_token, gemini_api_key FROM project_secrets WHERE project_id = CAST(:pid AS uuid)"),
         {"pid": project_id}
     )
     sec_row = sec.mappings().first()
@@ -348,7 +348,7 @@ async def get_onboarding_status(
 
     # Agent?
     agent = await db.execute(
-        sa_text("SELECT id, name FROM agents WHERE project_id = :pid::uuid AND is_active = true"),
+        sa_text("SELECT id, name FROM agents WHERE project_id = CAST(:pid AS uuid) AND is_active = true"),
         {"pid": project_id}
     )
     agent_row = agent.mappings().first()
@@ -360,7 +360,7 @@ async def get_onboarding_status(
 
     # Knowledge base?
     kb_count = await db.execute(
-        sa_text("SELECT COUNT(*) FROM project_knowledge_base WHERE project_id = :pid::uuid"),
+        sa_text("SELECT COUNT(*) FROM project_knowledge_base WHERE project_id = CAST(:pid AS uuid)"),
         {"pid": project_id}
     )
     n_kb = kb_count.scalar() or 0
@@ -372,7 +372,7 @@ async def get_onboarding_status(
 
     # Pipeline stages?
     ps_count = await db.execute(
-        sa_text("SELECT COUNT(*) FROM pipeline_stages WHERE project_id = :pid::uuid"),
+        sa_text("SELECT COUNT(*) FROM pipeline_stages WHERE project_id = CAST(:pid AS uuid)"),
         {"pid": project_id}
     )
     n_stages = ps_count.scalar() or 0
@@ -384,7 +384,7 @@ async def get_onboarding_status(
 
     # Dashboard user?
     user_count = await db.execute(
-        sa_text("SELECT COUNT(*) FROM dashboard_users WHERE client_id = :cid::uuid AND is_active = true"),
+        sa_text("SELECT COUNT(*) FROM dashboard_users WHERE client_id = CAST(:cid AS uuid) AND is_active = true"),
         {"cid": tenant_id}
     )
     n_users = user_count.scalar() or 0

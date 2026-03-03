@@ -59,8 +59,8 @@ class AgentManager:
                     (project_id, name, system_prompt, llm_model,
                      first_message, voice_id, send_audio, settings, is_active)
                 VALUES
-                    (:pid::uuid, :name, :prompt, :model,
-                     :first_msg, :voice, :audio, :settings::jsonb, true)
+                    (CAST(:pid AS uuid), :name, :prompt, :model,
+                     :first_msg, :voice, :audio, CAST(:settings AS jsonb), true)
                 RETURNING id, project_id, name, system_prompt, llm_model,
                           first_message, voice_id, send_audio, rag_store_id,
                           settings, is_active, created_at, updated_at
@@ -86,7 +86,7 @@ class AgentManager:
                 SELECT id, project_id, name, system_prompt, llm_model,
                        first_message, voice_id, send_audio, rag_store_id,
                        settings, is_active, created_at, updated_at
-                FROM agents WHERE id = :aid::uuid
+                FROM agents WHERE id = CAST(:aid AS uuid)
             """),
             {"aid": agent_id}
         )
@@ -101,7 +101,7 @@ class AgentManager:
                        first_message, voice_id, send_audio, rag_store_id,
                        settings, is_active, created_at, updated_at
                 FROM agents
-                WHERE project_id = :pid::uuid AND is_active = true
+                WHERE project_id = CAST(:pid AS uuid) AND is_active = true
                 LIMIT 1
             """),
             {"pid": project_id}
@@ -117,7 +117,7 @@ class AgentManager:
                        first_message, voice_id, send_audio, rag_store_id,
                        settings, is_active, created_at, updated_at
                 FROM agents
-                WHERE project_id = :pid::uuid
+                WHERE project_id = CAST(:pid AS uuid)
                 ORDER BY is_active DESC, created_at DESC
             """),
             {"pid": project_id}
@@ -138,7 +138,7 @@ class AgentManager:
             if key not in allowed_fields:
                 continue
             if key == "settings":
-                set_clauses.append(f"settings = :{key}::jsonb")
+                set_clauses.append(f"settings = CAST(:{key} AS jsonb)")
                 params[key] = json.dumps(value)
             elif key == "send_audio" or key == "is_active":
                 set_clauses.append(f"{key} = :{key}")
@@ -157,13 +157,13 @@ class AgentManager:
                 await self.db.execute(
                     sa_text("""
                         UPDATE agents SET is_active = false, updated_at = now()
-                        WHERE project_id = :pid AND id != :aid::uuid AND is_active = true
+                        WHERE project_id = :pid AND id != CAST(:aid AS uuid) AND is_active = true
                     """),
                     {"pid": str(agent["project_id"]), "aid": agent_id}
                 )
 
         set_clauses.append("updated_at = now()")
-        sql = f"UPDATE agents SET {', '.join(set_clauses)} WHERE id = :aid::uuid"
+        sql = f"UPDATE agents SET {', '.join(set_clauses)} WHERE id = CAST(:aid AS uuid)"
 
         await self.db.execute(sa_text(sql), params)
         return await self.get_agent(agent_id)
@@ -171,7 +171,7 @@ class AgentManager:
     async def delete_agent(self, agent_id: str) -> bool:
         """Deleta um agente."""
         result = await self.db.execute(
-            sa_text("DELETE FROM agents WHERE id = :aid::uuid RETURNING id"),
+            sa_text("DELETE FROM agents WHERE id = CAST(:aid AS uuid) RETURNING id"),
             {"aid": agent_id}
         )
         return result.scalar_one_or_none() is not None
@@ -197,7 +197,7 @@ class AgentManager:
                 INSERT INTO project_tools_knowledge
                     (project_id, tool_name, instructions, api_endpoint)
                 VALUES
-                    (:pid::uuid, :name, :instr, :endpoint)
+                    (CAST(:pid AS uuid), :name, :instr, :endpoint)
                 RETURNING id, project_id, tool_name, instructions, api_endpoint, created_at
             """),
             {
@@ -216,7 +216,7 @@ class AgentManager:
             sa_text("""
                 SELECT id, project_id, tool_name, instructions, api_endpoint, created_at
                 FROM project_tools_knowledge
-                WHERE project_id = :pid::uuid
+                WHERE project_id = CAST(:pid AS uuid)
                 ORDER BY created_at ASC
             """),
             {"pid": project_id}
@@ -250,7 +250,7 @@ class AgentManager:
         result = await self.db.execute(
             sa_text("""
                 DELETE FROM project_tools_knowledge
-                WHERE id = :tid::uuid AND project_id = :pid::uuid
+                WHERE id = CAST(:tid AS uuid) AND project_id = CAST(:pid AS uuid)
                 RETURNING id
             """),
             {"tid": tool_id, "pid": project_id}
@@ -271,7 +271,7 @@ class AgentManager:
                 INSERT INTO project_knowledge_base
                     (project_id, content, metadata)
                 VALUES
-                    (:pid::uuid, :content, :meta::jsonb)
+                    (CAST(:pid AS uuid), :content, CAST(:meta AS jsonb))
                 RETURNING id, project_id, content, metadata, created_at
             """),
             {
@@ -289,7 +289,7 @@ class AgentManager:
             sa_text("""
                 SELECT id, project_id, content, metadata, created_at
                 FROM project_knowledge_base
-                WHERE project_id = :pid::uuid
+                WHERE project_id = CAST(:pid AS uuid)
                 ORDER BY created_at ASC
             """),
             {"pid": project_id}
@@ -301,7 +301,7 @@ class AgentManager:
         result = await self.db.execute(
             sa_text("""
                 DELETE FROM project_knowledge_base
-                WHERE id = :kid::uuid AND project_id = :pid::uuid
+                WHERE id = CAST(:kid AS uuid) AND project_id = CAST(:pid AS uuid)
                 RETURNING id
             """),
             {"kid": knowledge_id, "pid": project_id}

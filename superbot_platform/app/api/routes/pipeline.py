@@ -83,7 +83,7 @@ async def list_stages(
         sa_text("""
             SELECT id, project_id, name, slug, position, color, auto_assign, created_at
             FROM pipeline_stages
-            WHERE project_id = :pid::uuid
+            WHERE project_id = CAST(:pid AS uuid)
             ORDER BY position ASC
         """),
         {"pid": project_id}
@@ -108,7 +108,7 @@ async def create_stage(
     result = await db.execute(
         sa_text("""
             INSERT INTO pipeline_stages (project_id, name, slug, position, color, auto_assign)
-            VALUES (:pid::uuid, :name, :slug, :pos, :color, :auto)
+            VALUES (CAST(:pid AS uuid), :name, :slug, :pos, :color, :auto)
             RETURNING id, project_id, name, slug, position, color, auto_assign, created_at
         """),
         {
@@ -147,7 +147,7 @@ async def update_stage(
 
     sql = f"""
         UPDATE pipeline_stages SET {', '.join(set_clauses)}
-        WHERE id = :sid::uuid AND project_id = :pid::uuid
+        WHERE id = CAST(:sid AS uuid) AND project_id = CAST(:pid AS uuid)
         RETURNING id, project_id, name, slug, position, color, auto_assign
     """
     result = await db.execute(sa_text(sql), params)
@@ -174,7 +174,7 @@ async def delete_stage(
     result = await db.execute(
         sa_text("""
             DELETE FROM pipeline_stages
-            WHERE id = :sid::uuid AND project_id = :pid::uuid
+            WHERE id = CAST(:sid AS uuid) AND project_id = CAST(:pid AS uuid)
             RETURNING id
         """),
         {"sid": stage_id, "pid": project_id}
@@ -199,7 +199,7 @@ async def seed_default_stages(
 
     # Verifica se já tem etapas
     existing = await db.execute(
-        sa_text("SELECT COUNT(*) FROM pipeline_stages WHERE project_id = :pid::uuid"),
+        sa_text("SELECT COUNT(*) FROM pipeline_stages WHERE project_id = CAST(:pid AS uuid)"),
         {"pid": project_id}
     )
     if existing.scalar() > 0:
@@ -219,7 +219,7 @@ async def seed_default_stages(
         result = await db.execute(
             sa_text("""
                 INSERT INTO pipeline_stages (project_id, name, slug, position, color)
-                VALUES (:pid::uuid, :name, :slug, :pos, :color)
+                VALUES (CAST(:pid AS uuid), :name, :slug, :pos, :color)
                 RETURNING id, name, slug, position, color
             """),
             {"pid": project_id, "name": name, "slug": slug, "pos": pos, "color": color}
@@ -249,7 +249,7 @@ async def list_team(
                    u.name AS user_name, u.email AS user_email
             FROM sales_team_members s
             JOIN dashboard_users u ON u.id = s.user_id
-            WHERE s.project_id = :pid::uuid
+            WHERE s.project_id = CAST(:pid AS uuid)
             ORDER BY s.role, u.name
         """),
         {"pid": project_id}
@@ -261,7 +261,7 @@ async def list_team(
         count_result = await db.execute(
             sa_text("""
                 SELECT COUNT(*) FROM conversation_assignments
-                WHERE assigned_to = :mid::uuid AND status = 'active'
+                WHERE assigned_to = CAST(:mid AS uuid) AND status = 'active'
             """),
             {"mid": str(member["id"])}
         )
@@ -286,7 +286,7 @@ async def add_team_member(
     result = await db.execute(
         sa_text("""
             INSERT INTO sales_team_members (project_id, user_id, role, max_concurrent_conversations)
-            VALUES (:pid::uuid, :uid::uuid, :role, :max_conv)
+            VALUES (CAST(:pid AS uuid), CAST(:uid AS uuid), :role, :max_conv)
             ON CONFLICT (project_id, user_id) DO UPDATE SET
                 role = EXCLUDED.role,
                 max_concurrent_conversations = EXCLUDED.max_concurrent_conversations,
@@ -329,7 +329,7 @@ async def update_team_member(
 
     sql = f"""
         UPDATE sales_team_members SET {', '.join(set_clauses)}
-        WHERE id = :mid::uuid AND project_id = :pid::uuid
+        WHERE id = CAST(:mid AS uuid) AND project_id = CAST(:pid AS uuid)
         RETURNING id, project_id, user_id, role, max_concurrent_conversations, is_available
     """
     result = await db.execute(sa_text(sql), params)
@@ -356,7 +356,7 @@ async def remove_team_member(
     result = await db.execute(
         sa_text("""
             DELETE FROM sales_team_members
-            WHERE id = :mid::uuid AND project_id = :pid::uuid
+            WHERE id = CAST(:mid AS uuid) AND project_id = CAST(:pid AS uuid)
             RETURNING id
         """),
         {"mid": member_id, "pid": project_id}
@@ -381,7 +381,7 @@ async def list_assignments(
     """Lista atribuições de conversas."""
     project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
 
-    where_clauses = ["ca.project_id = :pid::uuid"]
+    where_clauses = ["ca.project_id = CAST(:pid AS uuid)"]
     params = {"pid": project_id}
 
     if status != "all":
@@ -389,11 +389,11 @@ async def list_assignments(
         params["status"] = status
 
     if assigned_to:
-        where_clauses.append("ca.assigned_to = :ato::uuid")
+        where_clauses.append("ca.assigned_to = CAST(:ato AS uuid)")
         params["ato"] = assigned_to
 
     if stage_id:
-        where_clauses.append("ca.pipeline_stage_id = :sid::uuid")
+        where_clauses.append("ca.pipeline_stage_id = CAST(:sid AS uuid)")
         params["sid"] = stage_id
 
     where_sql = " AND ".join(where_clauses)
@@ -440,7 +440,7 @@ async def assign_conversation(
         sa_text("""
             UPDATE conversation_assignments
             SET status = 'reassigned', completed_at = now()
-            WHERE project_id = :pid::uuid
+            WHERE project_id = CAST(:pid AS uuid)
               AND conversation_id = :cid
               AND channel_type = :ct
               AND status = 'active'
@@ -454,7 +454,7 @@ async def assign_conversation(
         stage_result = await db.execute(
             sa_text("""
                 SELECT id FROM pipeline_stages
-                WHERE project_id = :pid::uuid
+                WHERE project_id = CAST(:pid AS uuid)
                 ORDER BY position ASC LIMIT 1
             """),
             {"pid": project_id}
@@ -468,8 +468,8 @@ async def assign_conversation(
                 (project_id, conversation_id, channel_type,
                  assigned_to, assigned_by, pipeline_stage_id, notes)
             VALUES
-                (:pid::uuid, :cid, :ct,
-                 :ato::uuid, :aby::uuid, :sid::uuid, :notes)
+                (CAST(:pid AS uuid), :cid, :ct,
+                 CAST(:ato AS uuid), CAST(:aby AS uuid), CAST(:sid AS uuid), :notes)
             RETURNING id, project_id, conversation_id, channel_type,
                       assigned_to, assigned_by, pipeline_stage_id,
                       status, notes, assigned_at
@@ -493,7 +493,7 @@ async def assign_conversation(
             INSERT INTO handoff_history
                 (project_id, conversation_id, channel_type, from_type, to_type, to_id, reason)
             VALUES
-                (:pid::uuid, :cid, :ct, 'pool', 'vendedor', :to_id::uuid, :reason)
+                (CAST(:pid AS uuid), :cid, :ct, 'pool', 'vendedor', CAST(:to_id AS uuid), :reason)
         """),
         {
             "pid": project_id,
@@ -522,8 +522,8 @@ async def move_assignment_stage(
     result = await db.execute(
         sa_text("""
             UPDATE conversation_assignments
-            SET pipeline_stage_id = :sid::uuid, notes = COALESCE(:notes, notes)
-            WHERE id = :aid::uuid AND project_id = :pid::uuid AND status = 'active'
+            SET pipeline_stage_id = CAST(:sid AS uuid), notes = COALESCE(:notes, notes)
+            WHERE id = CAST(:aid AS uuid) AND project_id = CAST(:pid AS uuid) AND status = 'active'
             RETURNING id, conversation_id, pipeline_stage_id, status
         """),
         {"aid": assignment_id, "pid": project_id, "sid": body.pipeline_stage_id, "notes": body.notes}
@@ -549,7 +549,7 @@ async def complete_assignment(
         sa_text("""
             UPDATE conversation_assignments
             SET status = 'completed', completed_at = now()
-            WHERE id = :aid::uuid AND project_id = :pid::uuid AND status = 'active'
+            WHERE id = CAST(:aid AS uuid) AND project_id = CAST(:pid AS uuid) AND status = 'active'
             RETURNING id, conversation_id, status
         """),
         {"aid": assignment_id, "pid": project_id}
@@ -581,7 +581,7 @@ async def get_pool(
                    cs.status, cs.last_event_at, cs.last_text, cs.last_direction,
                    cs.ai_state, cs.summary_short, cs.created_at
             FROM conversation_states cs
-            WHERE cs.project_id = :pid::uuid
+            WHERE cs.project_id = CAST(:pid AS uuid)
               AND cs.status IN ('open', 'waiting_customer')
               AND NOT EXISTS (
                   SELECT 1 FROM conversation_assignments ca
@@ -617,7 +617,7 @@ async def create_handoff(
             SELECT ca.assigned_to, stm.role
             FROM conversation_assignments ca
             LEFT JOIN sales_team_members stm ON stm.id = ca.assigned_to
-            WHERE ca.project_id = :pid::uuid
+            WHERE ca.project_id = CAST(:pid AS uuid)
               AND ca.conversation_id = :cid
               AND ca.channel_type = :ct
               AND ca.status = 'active'
@@ -635,8 +635,8 @@ async def create_handoff(
                 (project_id, conversation_id, channel_type,
                  from_type, from_id, to_type, to_id, reason)
             VALUES
-                (:pid::uuid, :cid, :ct,
-                 :ft, :fi::uuid, :tt, :ti::uuid, :reason)
+                (CAST(:pid AS uuid), :cid, :ct,
+                 :ft, CAST(:fi AS uuid), :tt, CAST(:ti AS uuid), :reason)
             RETURNING id, project_id, conversation_id, from_type, to_type, reason, created_at
         """),
         {
@@ -659,7 +659,7 @@ async def create_handoff(
             sa_text("""
                 UPDATE conversation_assignments
                 SET status = 'reassigned', completed_at = now()
-                WHERE project_id = :pid::uuid
+                WHERE project_id = CAST(:pid AS uuid)
                   AND conversation_id = :cid
                   AND channel_type = :ct
                   AND status = 'active'
@@ -674,8 +674,8 @@ async def create_handoff(
                     (project_id, conversation_id, channel_type,
                      assigned_to, assigned_by, notes)
                 VALUES
-                    (:pid::uuid, :cid, :ct,
-                     :ato::uuid, :aby::uuid, :notes)
+                    (CAST(:pid AS uuid), :cid, :ct,
+                     CAST(:ato AS uuid), CAST(:aby AS uuid), :notes)
             """),
             {
                 "pid": project_id,
@@ -703,7 +703,7 @@ async def list_handoffs(
     project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
 
     params = {"pid": project_id, "lim": limit}
-    where = "hh.project_id = :pid::uuid"
+    where = "hh.project_id = CAST(:pid AS uuid)"
 
     if conversation_id:
         where += " AND hh.conversation_id = :cid"
@@ -746,7 +746,7 @@ async def get_metrics(
             FROM sales_team_members stm
             JOIN dashboard_users du ON du.id = stm.user_id
             LEFT JOIN conversation_assignments ca ON ca.assigned_to = stm.id
-            WHERE stm.project_id = :pid::uuid
+            WHERE stm.project_id = CAST(:pid AS uuid)
             GROUP BY stm.id, du.name
             ORDER BY du.name
         """),
@@ -761,7 +761,7 @@ async def get_metrics(
                    COUNT(ca.id) FILTER (WHERE ca.status = 'active') AS active_count
             FROM pipeline_stages ps
             LEFT JOIN conversation_assignments ca ON ca.pipeline_stage_id = ps.id AND ca.status = 'active'
-            WHERE ps.project_id = :pid::uuid
+            WHERE ps.project_id = CAST(:pid AS uuid)
             GROUP BY ps.id, ps.name, ps.color, ps.position
             ORDER BY ps.position
         """),
@@ -773,7 +773,7 @@ async def get_metrics(
     pool_result = await db.execute(
         sa_text("""
             SELECT COUNT(*) FROM conversation_states cs
-            WHERE cs.project_id = :pid::uuid
+            WHERE cs.project_id = CAST(:pid AS uuid)
               AND cs.status IN ('open', 'waiting_customer')
               AND NOT EXISTS (
                   SELECT 1 FROM conversation_assignments ca
