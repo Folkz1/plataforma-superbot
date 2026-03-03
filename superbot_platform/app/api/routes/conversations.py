@@ -428,12 +428,17 @@ async def list_conversations(
     # Build response
     conv_list = []
     for conv in conversations:
-        # Message count (with fallback: try with channel_type first, then without)
+        # Message count: exclude receipts (incoming with no text and no media)
         msg_count_query = select(func.count(ConversationEvent.id)).where(
             and_(
                 ConversationEvent.project_id == conv.project_id,
                 ConversationEvent.channel_type == conv.channel_type,
                 ConversationEvent.conversation_id == conv.conversation_id,
+                ~and_(
+                    ConversationEvent.text.is_(None),
+                    ConversationEvent.media.is_(None),
+                    ConversationEvent.direction == "in",
+                ),
             )
         )
         msg_result = await db.execute(msg_count_query)
@@ -445,6 +450,11 @@ async def list_conversations(
                 and_(
                     ConversationEvent.project_id == conv.project_id,
                     ConversationEvent.conversation_id == conv.conversation_id,
+                    ~and_(
+                        ConversationEvent.text.is_(None),
+                        ConversationEvent.media.is_(None),
+                        ConversationEvent.direction == "in",
+                    ),
                 )
             )
             fb_result = await db.execute(fallback_query)
