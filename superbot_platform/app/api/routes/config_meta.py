@@ -265,9 +265,9 @@ async def update_meta_secrets(
               :notification_phone,
               :notification_email,
               :followup_enabled,
-              CASE WHEN :followup_config IS NULL THEN NULL ELSE (:followup_config)::jsonb END,
+              (:followup_config)::jsonb,
               :feedback_enabled,
-              CASE WHEN :feedback_config IS NULL THEN NULL ELSE (:feedback_config)::jsonb END,
+              (:feedback_config)::jsonb,
               now(),
               now()
             )

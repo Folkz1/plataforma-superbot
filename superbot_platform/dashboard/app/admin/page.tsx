@@ -99,7 +99,7 @@ export default function AdminDashboard() {
     timezone: 'America/Sao_Paulo',
     channel_type: 'whatsapp', channel_identifier: '', meta_access_token: '',
     meta_page_id: '', meta_ig_id: '',
-    agent_name: '', agent_system_prompt: '', agent_llm_model: 'gemini-2.0-flash',
+    agent_name: '', agent_system_prompt: '', agent_llm_model: 'gpt-4o-mini',
     user_name: '', user_email: '', user_password: '',
   });
 
@@ -215,7 +215,7 @@ export default function AdminDashboard() {
       timezone: 'America/Sao_Paulo',
       channel_type: 'whatsapp', channel_identifier: '', meta_access_token: '',
       meta_page_id: '', meta_ig_id: '',
-      agent_name: '', agent_system_prompt: '', agent_llm_model: 'gemini-2.0-flash',
+      agent_name: '', agent_system_prompt: '', agent_llm_model: 'gpt-4o-mini',
       user_name: '', user_email: '', user_password: '',
     });
     setShowWizard(true);
@@ -741,7 +741,7 @@ export default function AdminDashboard() {
             )}
 
             {/* Wizard Body */}
-            <div className="px-6 py-5 overflow-y-auto flex-1">
+            <form onSubmit={(e) => e.preventDefault()} className="px-6 py-5 overflow-y-auto flex-1">
               {/* Step 0: Company */}
               {wizardStep === 0 && (
                 <div className="space-y-4">
@@ -815,7 +815,7 @@ export default function AdminDashboard() {
               {wizardStep === 2 && (
                 <div className="space-y-4">
                   <h4 className="text-base font-semibold text-gray-900">Agente de IA</h4>
-                  <p className="text-sm text-gray-500">Configure o bot que vai atender. Pode pular e configurar depois.</p>
+                  <p className="text-sm text-gray-500">Configure o bot. Modelo e tools podem ser ajustados depois em "Agente IA". Pode pular e configurar depois.</p>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Nome do agente</label>
                     <input type="text" value={wizardData.agent_name}
@@ -824,23 +824,13 @@ export default function AdminDashboard() {
                       placeholder="Ex: Giulia, Assistente Virtual" />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Modelo LLM</label>
-                    <select value={wizardData.agent_llm_model}
-                      onChange={(e) => setWizardData(prev => ({ ...prev, agent_llm_model: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500">
-                      <option value="gemini-2.0-flash">Gemini 2.0 Flash (rapido)</option>
-                      <option value="gemini-2.0-pro">Gemini 2.0 Pro (avancado)</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini</option>
-                      <option value="gpt-4o">GPT-4o</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">System Prompt</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Instrucoes do agente (System Prompt)</label>
                     <textarea value={wizardData.agent_system_prompt}
                       onChange={(e) => setWizardData(prev => ({ ...prev, agent_system_prompt: e.target.value }))}
-                      rows={5}
+                      rows={6}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 text-sm"
-                      placeholder="Voce e um assistente virtual da empresa X. Ajude os clientes com..." />
+                      placeholder="Voce e um assistente virtual da empresa X. Ajude os clientes com informacoes sobre produtos e agende visitas..." />
+                    <p className="text-xs text-gray-400 mt-1">Modelo padrao: GPT-4o Mini. Altere depois em "Agente IA".</p>
                   </div>
                 </div>
               )}
@@ -930,6 +920,8 @@ export default function AdminDashboard() {
                 </div>
               )}
             </div>
+
+            </form>
 
             {/* Wizard Footer */}
             <div className="px-6 py-4 border-t flex justify-between items-center flex-shrink-0">

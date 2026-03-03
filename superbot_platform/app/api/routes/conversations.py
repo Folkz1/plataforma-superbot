@@ -834,64 +834,76 @@ async def transfer_to_human(
     db.add(event)
     await db.commit()
 
-    # Send WhatsApp notification to notification_phone (best-effort)
-    notification_sent = False
-    try:
-        # Get project secrets for notification_phone
-        from app.db.models import ProjectSecrets
-        secret_result = await db.execute(
-            select(ProjectSecrets).where(ProjectSecrets.project_id == project_uuid)
-        )
-        secrets = secret_result.scalar_one_or_none()
+    # Resolve contact name for notifications
+    contact_result = await db.execute(
+        select(Contact.name).where(Contact.id == conversation_id)
+    )
+    contact_name = contact_result.scalars().first() or conversation_id
 
-        notification_phone = getattr(secrets, 'notification_phone', None) if secrets else None
+    # Get channel credentials
+    ch_type = state.channel_type or "whatsapp"
+    channel = (await db.execute(
+        select(Channel).where(
+            and_(
+                Channel.project_id == project_uuid,
+                Channel.channel_type == ch_type,
+            )
+        ).limit(1)
+    )).scalar_one_or_none()
 
-        if notification_phone:
-            # Get WhatsApp channel for sending
-            channel = (await db.execute(
-                select(Channel).where(
-                    and_(
-                        Channel.project_id == project_uuid,
-                        Channel.channel_type == "whatsapp",
-                    )
-                ).limit(1)
-            )).scalar_one_or_none()
+    n8n_notified = False
+    client_msg_sent = False
 
-            if channel and channel.access_token:
-                # Resolve contact name
-                contact_result = await db.execute(
-                    select(Contact.name).where(Contact.id == conversation_id)
-                )
-                contact_name = contact_result.scalars().first() or conversation_id
+    async with httpx.AsyncClient(timeout=10) as http:
+        # 1) Call N8N webhook "Transfer To Human (Multitenant)" - handles admin notification
+        try:
+            await http.post(
+                "https://ai.superbot.digital/webhook/transfer-to-number",
+                json={
+                    "project_id": str(project_uuid),
+                    "customer_phone": conversation_id,
+                    "customer_name": contact_name,
+                    "reason": body.reason or "Transferido pelo dashboard",
+                    "summary": f"Conversa via {ch_type} transferida por {current_user.name or current_user.email}",
+                }
+            )
+            n8n_notified = True
+        except Exception:
+            pass
 
-                msg_text = (
-                    f"*Transferencia de conversa*\n\n"
-                    f"Contato: {contact_name}\n"
-                    f"Canal: {state.channel_type}\n"
-                    f"Transferido por: {current_user.name or current_user.email}\n"
-                    f"Motivo: {body.reason or 'Sem motivo informado'}\n"
-                    f"Timeout: {timeout_hours}h"
-                )
-
-                async with httpx.AsyncClient(timeout=10) as client:
-                    await client.post(
+        # 2) Send message to the CLIENT informing them of the transfer
+        if channel and channel.access_token:
+            client_msg = "Sua conversa foi transferida para um atendente humano. Em breve voce sera atendido. Agradecemos a paciencia!"
+            try:
+                if ch_type == "whatsapp":
+                    await http.post(
                         f"https://graph.facebook.com/v21.0/{channel.channel_identifier}/messages",
                         headers={"Authorization": f"Bearer {channel.access_token}"},
                         json={
                             "messaging_product": "whatsapp",
                             "recipient_type": "individual",
-                            "to": notification_phone,
+                            "to": conversation_id,
                             "type": "text",
-                            "text": {"body": msg_text}
+                            "text": {"body": client_msg}
                         }
                     )
-                notification_sent = True
-    except Exception:
-        pass  # Notification is best-effort
+                elif ch_type in ("messenger", "instagram"):
+                    await http.post(
+                        "https://graph.facebook.com/v21.0/me/messages",
+                        params={"access_token": channel.access_token},
+                        json={
+                            "recipient": {"id": conversation_id},
+                            "message": {"text": client_msg}
+                        }
+                    )
+                client_msg_sent = True
+            except Exception:
+                pass
 
     return {
         "ok": True,
         "status": "handoff",
         "human_takeover_until": meta.get("human_takeover_until"),
-        "notification_sent": notification_sent
+        "n8n_notified": n8n_notified,
+        "client_msg_sent": client_msg_sent,
     }
