@@ -919,8 +919,6 @@ export default function AdminDashboard() {
                   )}
                 </div>
               )}
-            </div>
-
             </form>
 
             {/* Wizard Footer */}
