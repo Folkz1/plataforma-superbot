@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """
-SuperBot - EasyPanel API Tool
-Gerencia containers e deploy no EasyPanel.
+SuperBot - EasyPanel API Tool (tRPC)
+Gerencia containers e deploy no EasyPanel via tRPC API.
 Uso: python tools/easypanel_api.py <comando> [args]
 
 Comandos:
   status                  Status de todos os servicos
-  services                Lista servicos do projeto
-  redeploy <service>      Faz redeploy de um servico
+  inspect <service>       Detalhes completos de um servico
+  deploy <service>        Faz deploy/redeploy de um servico
   logs <service>          Ultimas linhas de log
   env <service>           Lista env vars de um servico
-  domains <service>       Lista dominios configurados
+  projects                Lista todos projetos
 
+Servicos conhecidos: plataforma-superbot, frontend-superbot
 Requer: EASYPANEL_URL e EASYPANEL_API_KEY no .env ou ambiente.
-EasyPanel URL padrao: https://72.60.13.22:3000 (ou via painel web)
 """
 import json
 import os
 import sys
 import urllib.request
+import urllib.parse
 import ssl
 from pathlib import Path
 
@@ -39,22 +40,48 @@ if env_path.exists():
             EASYPANEL_PROJECT = line.split("=", 1)[1].strip()
 
 
-def _request(method, path, data=None):
-    """Request para EasyPanel API."""
-    url = f"{EASYPANEL_URL}{path}"
+def _trpc_get(procedure, input_data=None):
+    """GET request para EasyPanel tRPC API."""
+    url = f"{EASYPANEL_URL}/api/trpc/{procedure}"
+    if input_data:
+        url += "?input=" + urllib.parse.quote(json.dumps({"json": input_data}))
     headers = {
         "Authorization": f"Bearer {EASYPANEL_API_KEY}",
         "Content-Type": "application/json",
     }
-    body = json.dumps(data).encode("utf-8") if data else None
-    req = urllib.request.Request(url, data=body, method=method, headers=headers)
-    # EasyPanel often uses self-signed certs
+    req = urllib.request.Request(url, method="GET", headers=headers)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("result", {}).get("data", {}).get("json", data)
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8")
+        print(f"[ERROR] HTTP {e.code}: {error_body[:500]}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _trpc_post(procedure, input_data):
+    """POST request para EasyPanel tRPC API."""
+    url = f"{EASYPANEL_URL}/api/trpc/{procedure}"
+    headers = {
+        "Authorization": f"Bearer {EASYPANEL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = json.dumps({"json": input_data}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("result", {}).get("data", {}).get("json", data)
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
         print(f"[ERROR] HTTP {e.code}: {error_body[:500]}", file=sys.stderr)
@@ -65,96 +92,166 @@ def _request(method, path, data=None):
 
 
 def cmd_status():
-    """Status de todos servicos."""
-    if not EASYPANEL_URL:
-        print("[INFO] EASYPANEL_URL nao configurada no .env")
-        print("[INFO] Para configurar, adicione ao .env:")
-        print("  EASYPANEL_URL=https://72.60.13.22:3000")
-        print("  EASYPANEL_API_KEY=<seu_token>")
-        print("")
-        print("Alternativa: acessar via web https://72.60.13.22:3000")
-        print(f"Projeto: {EASYPANEL_PROJECT}")
-        return
+    """Status de todos servicos do projeto."""
+    result = _trpc_get("projects.listProjectsAndServices")
+    projects = result.get("projects", [])
+    services = result.get("services", [])
 
-    result = _request("GET", f"/api/projects/{EASYPANEL_PROJECT}/services")
-    services = result.get("services", result if isinstance(result, list) else [])
-    print(f"{'Servico':30s} | {'Status':10s} | {'Tipo':10s} | Dominio")
-    print("-" * 90)
-    for s in services:
+    print(f"=== Projetos ({len(projects)}) ===")
+    for p in projects:
+        print(f"  {p['name']} (criado: {p.get('createdAt', '?')[:10]})")
+
+    # Filter services for our project
+    proj_services = [s for s in services if s.get("projectName") == EASYPANEL_PROJECT]
+    print(f"\n=== Servicos de '{EASYPANEL_PROJECT}' ({len(proj_services)}) ===")
+    print(f"{'Nome':30s} | {'Tipo':10s} | {'Enabled':8s} | Imagem/Source")
+    print("-" * 95)
+    for s in proj_services:
         name = s.get("name", "?")
-        status = s.get("status", "?")
         stype = s.get("type", "?")
-        domains = ", ".join(d.get("host", "") for d in s.get("domains", []))
-        print(f"{name:30s} | {status:10s} | {stype:10s} | {domains}")
+        enabled = "SIM" if s.get("enabled") else "NAO"
+        source = s.get("source", {})
+        if source.get("type") == "image":
+            src_info = source.get("image", "?")
+        elif source.get("type") == "github":
+            src_info = f"{source.get('owner', '?')}/{source.get('repo', '?')}:{source.get('ref', '?')}"
+        else:
+            src_info = source.get("type", "?")
+        print(f"{name:30s} | {stype:10s} | {enabled:8s} | {src_info}")
 
 
-def cmd_services():
-    """Lista servicos com detalhes."""
-    cmd_status()  # Same output for now
+def cmd_inspect(service):
+    """Detalhes completos de um servico."""
+    result = _trpc_get("services.app.inspectService", {
+        "projectName": EASYPANEL_PROJECT,
+        "serviceName": service,
+    })
+
+    print(f"=== {service} ===")
+    print(f"Tipo: {result.get('type', '?')}")
+    print(f"Enabled: {result.get('enabled', '?')}")
+
+    # Source
+    source = result.get("source", {})
+    print(f"\nSource: {source.get('type', '?')}")
+    if source.get("type") == "image":
+        print(f"  Image: {source.get('image', '?')}")
+    elif source.get("type") == "github":
+        print(f"  Repo: {source.get('owner', '?')}/{source.get('repo', '?')}")
+        print(f"  Branch: {source.get('ref', '?')}")
+
+    # Deploy info
+    deploy = result.get("deploy", {})
+    if deploy:
+        print(f"\nDeploy:")
+        print(f"  Replicas: {deploy.get('replicas', '?')}")
+        print(f"  Zero downtime: {deploy.get('zeroDowntime', '?')}")
+
+    # Commit
+    commit = result.get("commit", {})
+    if commit:
+        sha = commit.get("sha", "?")[:12]
+        msg = commit.get("commit", {}).get("message", "?")[:80]
+        print(f"\nUltimo commit: {sha}")
+        print(f"  Msg: {msg}")
+
+    # Deploy URL
+    deploy_url = result.get("deploymentUrl", "")
+    if deploy_url:
+        print(f"\nDeploy URL: {deploy_url}")
+
+    # Token
+    token = result.get("token", "")
+    if token:
+        print(f"Token: {token[:8]}...{token[-4:]}")
+
+    # Env
+    env_str = result.get("env", "")
+    if env_str:
+        env_lines = env_str.strip().split("\n")
+        print(f"\nEnv vars ({len(env_lines)}):")
+        for line in env_lines:
+            if "=" in line:
+                k, v = line.split("=", 1)
+                if any(s in k.lower() for s in ["key", "secret", "token", "password"]):
+                    print(f"  {k}=****{v[-4:]}" if len(v) > 4 else f"  {k}=****")
+                else:
+                    print(f"  {k}={v[:80]}")
 
 
-def cmd_redeploy(service):
-    """Redeploy de um servico."""
-    if not EASYPANEL_URL:
-        print(f"[INFO] Para redeploy manual do '{service}':")
-        print(f"  1. Acesse https://72.60.13.22:3000")
-        print(f"  2. Projeto: {EASYPANEL_PROJECT}")
-        print(f"  3. Servico: {service}")
-        print(f"  4. Clique em 'Rebuild' ou 'Deploy'")
-        return
-
-    result = _request("POST", f"/api/projects/{EASYPANEL_PROJECT}/services/{service}/deploy")
-    print(f"Redeploy iniciado para '{service}'!")
-    print(json.dumps(result, indent=2))
+def cmd_deploy(service):
+    """Deploy/redeploy de um servico."""
+    print(f"Disparando deploy de '{service}'...")
+    result = _trpc_post("services.app.deployService", {
+        "projectName": EASYPANEL_PROJECT,
+        "serviceName": service,
+    })
+    print(f"Deploy disparado com sucesso!")
+    if result:
+        print(json.dumps(result, indent=2)[:500])
 
 
 def cmd_logs(service):
     """Logs de um servico."""
-    if not EASYPANEL_URL:
-        print(f"[INFO] EASYPANEL_URL nao configurada.")
-        print(f"Para ver logs via docker (se tiver acesso SSH):")
-        print(f"  ssh root@72.60.13.22 docker logs --tail 50 {EASYPANEL_PROJECT}-{service}")
-        return
-
-    result = _request("GET", f"/api/projects/{EASYPANEL_PROJECT}/services/{service}/logs?lines=50")
-    logs = result.get("logs", result if isinstance(result, str) else str(result))
-    print(logs)
+    result = _trpc_get("logs.getServiceLogs", {
+        "projectName": EASYPANEL_PROJECT,
+        "serviceName": service,
+    })
+    if isinstance(result, str):
+        print(result)
+    elif isinstance(result, dict):
+        logs = result.get("logs", result)
+        if isinstance(logs, list):
+            for line in logs:
+                print(line)
+        else:
+            print(logs)
+    else:
+        print(json.dumps(result, indent=2)[:3000])
 
 
 def cmd_env(service):
     """Env vars de um servico."""
-    if not EASYPANEL_URL:
-        print(f"[INFO] EASYPANEL_URL nao configurada.")
-        print(f"Acesse https://72.60.13.22:3000 > {EASYPANEL_PROJECT} > {service} > Environment")
+    result = _trpc_get("services.app.inspectService", {
+        "projectName": EASYPANEL_PROJECT,
+        "serviceName": service,
+    })
+    env_str = result.get("env", "")
+    if not env_str:
+        print("Nenhuma env var configurada.")
         return
 
-    result = _request("GET", f"/api/projects/{EASYPANEL_PROJECT}/services/{service}/env")
-    envs = result.get("env", result if isinstance(result, dict) else {})
-    for k, v in envs.items():
-        # Mask sensitive values
-        if any(s in k.lower() for s in ["key", "secret", "token", "password"]):
-            print(f"{k}=****{v[-4:]}" if len(str(v)) > 4 else f"{k}=****")
-        else:
-            print(f"{k}={v}")
+    print(f"=== Env vars de {service} ===\n")
+    for line in env_str.strip().split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            if any(s in k.lower() for s in ["key", "secret", "token", "password"]):
+                print(f"{k}=****{v[-4:]}" if len(v) > 4 else f"{k}=****")
+            else:
+                print(f"{k}={v}")
 
 
-def cmd_domains(service):
-    """Dominios de um servico."""
-    if not EASYPANEL_URL:
-        print(f"[INFO] Dominios conhecidos:")
-        print(f"  ai.superbot.digital -> N8N (porta 5678)")
-        print(f"  app.superbot.digital -> Next.js Dashboard")
-        print(f"  API FastAPI -> precisa configurar dominio/porta")
-        print(f"\nPara configurar: https://72.60.13.22:3000 > {EASYPANEL_PROJECT} > {service} > Domains")
-        return
+def cmd_projects():
+    """Lista todos projetos."""
+    result = _trpc_get("projects.listProjectsAndServices")
+    projects = result.get("projects", [])
+    services = result.get("services", [])
 
-    result = _request("GET", f"/api/projects/{EASYPANEL_PROJECT}/services/{service}")
-    domains = result.get("domains", [])
-    for d in domains:
-        print(f"  {d.get('host', '?')} -> porta {d.get('port', '?')}")
+    for p in projects:
+        pname = p["name"]
+        proj_svcs = [s for s in services if s.get("projectName") == pname]
+        print(f"\n=== {pname} ({len(proj_svcs)} servicos) ===")
+        for s in proj_svcs:
+            enabled = "ON" if s.get("enabled") else "OFF"
+            print(f"  [{enabled}] {s.get('name', '?')} ({s.get('type', '?')})")
 
 
 def main():
+    if not EASYPANEL_URL or not EASYPANEL_API_KEY:
+        print("[ERROR] EASYPANEL_URL e EASYPANEL_API_KEY necessarios.", file=sys.stderr)
+        print("Configure no .env ou como variavel de ambiente.")
+        sys.exit(1)
+
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(0)
@@ -164,11 +261,11 @@ def main():
 
     commands = {
         "status": (cmd_status, 0),
-        "services": (cmd_services, 0),
-        "redeploy": (cmd_redeploy, 1),
+        "inspect": (cmd_inspect, 1),
+        "deploy": (cmd_deploy, 1),
         "logs": (cmd_logs, 1),
         "env": (cmd_env, 1),
-        "domains": (cmd_domains, 1),
+        "projects": (cmd_projects, 0),
     }
 
     if cmd not in commands:
