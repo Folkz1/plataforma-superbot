@@ -94,7 +94,7 @@ const STAGES: Array<{
   },
 ];
 
-const STAGE_INDEX: Record<StageKey, number> = {};
+const STAGE_INDEX = {} as Record<StageKey, number>;
 STAGES.forEach((s, i) => { STAGE_INDEX[s.key] = i; });
 
 function inferStage(conv: Conversation): StageKey {
