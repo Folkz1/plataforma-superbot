@@ -174,8 +174,8 @@ async def provision_client(
     results["client_id"] = client_id
 
     # 6. Create dashboard user
-    from passlib.hash import bcrypt
-    password_hash = bcrypt.hash(body.user_password)
+    from app.api.routes.auth import hash_password
+    password_hash = hash_password(body.user_password)
 
     user_result = await db.execute(
         sa_text("""
