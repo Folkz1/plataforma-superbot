@@ -5,8 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import {
   Bot, ArrowLeft, Save, Loader2, AlertCircle, CheckCircle,
-  Wrench, BookOpen, Variable, Settings2, Plus, X, Trash2,
-  Phone, Globe, MessageSquare
+  Wrench, BookOpen, Settings2, Plus, X, Trash2,
+  Phone, Globe, MessageSquare, Upload
 } from 'lucide-react';
 
 // ─── Types ─────────────────────────────────────────────────
@@ -25,7 +25,6 @@ interface AgentDetail {
       tools?: AgentTool[];
       knowledge_base?: AgentKB[];
     };
-    max_duration_seconds?: number;
   };
   platform_settings?: { widget_settings?: { name?: string } };
 }
@@ -43,13 +42,15 @@ interface AgentKB {
   name?: string;
 }
 
+// Workspace tool format from ElevenLabs API: { id, tool_config: { name, description, type, api_schema } }
 interface WorkspaceTool {
-  tool_id?: string;
-  id?: string;
-  name: string;
-  description?: string;
-  type?: string;
-  api_schema?: { url?: string; method?: string };
+  id: string;
+  tool_config?: {
+    type?: string;
+    name?: string;
+    description?: string;
+    api_schema?: { url?: string; method?: string };
+  };
 }
 
 interface KBDoc {
@@ -59,14 +60,26 @@ interface KBDoc {
   type?: string;
 }
 
+// ─── Helpers ───────────────────────────────────────────────
+
+function getToolId(t: WorkspaceTool): string { return t.id || ''; }
+function getToolName(t: WorkspaceTool): string { return t.tool_config?.name || t.id || '?'; }
+function getToolDesc(t: WorkspaceTool): string { return t.tool_config?.description || ''; }
+function getToolUrl(t: WorkspaceTool): string { return t.tool_config?.api_schema?.url || ''; }
+function getKBId(d: KBDoc): string { return d.id || d.knowledge_base_id || ''; }
+
 // ─── Constants ─────────────────────────────────────────────
 
 const MODEL_OPTIONS = [
-  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini (rapido)' },
+  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
   { value: 'gpt-4o', label: 'GPT-4o' },
   { value: 'gpt-4.1', label: 'GPT-4.1' },
   { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   { value: 'claude-3.5-sonnet', label: 'Claude 3.5 Sonnet' },
+  { value: 'x-ai/grok-4.1-fast', label: 'Grok 4.1 Fast (OpenRouter)' },
+  { value: 'x-ai/grok-3-mini', label: 'Grok 3 Mini (OpenRouter)' },
+  { value: 'custom-llm', label: 'Custom LLM (OpenRouter)' },
 ];
 
 const LANGUAGE_OPTIONS = [
@@ -85,7 +98,7 @@ const CHANNEL_CONFIG: Record<string, { icon: any; label: string }> = {
   whatsapp: { icon: MessageSquare, label: 'WhatsApp' },
 };
 
-type Tab = 'config' | 'tools' | 'knowledge' | 'variables';
+type Tab = 'config' | 'tools' | 'knowledge';
 
 // ─── Component ─────────────────────────────────────────────
 
@@ -110,7 +123,6 @@ export default function AgentDetailPage() {
     model: 'gpt-4.1-mini',
     temperature: 0.5,
     max_tokens: 400,
-    max_duration_seconds: 300,
   });
 
   // Tools
@@ -118,12 +130,18 @@ export default function AgentDetailPage() {
   const [showToolModal, setShowToolModal] = useState(false);
   const [toolsLoading, setToolsLoading] = useState(false);
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
+  const [showCreateTool, setShowCreateTool] = useState(false);
+  const [newTool, setNewTool] = useState({ name: '', description: '', url: '', method: 'POST' });
+  const [creatingTool, setCreatingTool] = useState(false);
 
   // Knowledge
   const [wsKB, setWsKB] = useState<KBDoc[]>([]);
   const [showKBModal, setShowKBModal] = useState(false);
   const [kbLoading, setKBLoading] = useState(false);
   const [selectedKBIds, setSelectedKBIds] = useState<Set<string>>(new Set());
+  const [showCreateKB, setShowCreateKB] = useState(false);
+  const [newKB, setNewKB] = useState({ name: '', type: 'text' as 'text' | 'url', content: '' });
+  const [creatingKB, setCreatingKB] = useState(false);
 
   // ─── Init ──────────────────────────────────────────────
 
@@ -162,7 +180,6 @@ export default function AgentDetailPage() {
           model: llm?.model_id || 'gpt-4.1-mini',
           temperature: llm?.model_temperature ?? 0.5,
           max_tokens: llm?.max_tokens ?? 400,
-          max_duration_seconds: data.conversation_config?.max_duration_seconds ?? 300,
         });
       } else {
         setMsg({ type: 'error', text: 'Erro ao carregar agente' });
@@ -208,7 +225,6 @@ export default function AgentDetailPage() {
         model: form.model,
         temperature: form.temperature,
         max_tokens: form.max_tokens,
-        max_duration_seconds: form.max_duration_seconds,
       });
       setMsg({ type: 'success', text: 'Configuracao salva' });
       loadAgent(tenantId);
@@ -228,7 +244,7 @@ export default function AgentDetailPage() {
   const toolNameMap = useMemo(() => {
     const map: Record<string, WorkspaceTool> = {};
     for (const t of wsTools) {
-      const id = t.tool_id || t.id || '';
+      const id = getToolId(t);
       if (id) map[id] = t;
     }
     return map;
@@ -236,6 +252,7 @@ export default function AgentDetailPage() {
 
   const openToolModal = async () => {
     setShowToolModal(true);
+    setShowCreateTool(false);
     setToolsLoading(true);
     setSelectedToolIds(new Set());
     try {
@@ -290,16 +307,40 @@ export default function AgentDetailPage() {
     }
   };
 
+  const createTool = async () => {
+    if (!newTool.name || !newTool.url) return;
+    setCreatingTool(true);
+    try {
+      await api.post(`/api/elevenlabs/tools/${tenantId}`, {
+        name: newTool.name,
+        description: newTool.description,
+        type: 'webhook',
+        url: newTool.url,
+        method: newTool.method,
+      });
+      setMsg({ type: 'success', text: `Tool "${newTool.name}" criada` });
+      setNewTool({ name: '', description: '', url: '', method: 'POST' });
+      setShowCreateTool(false);
+      // Reload tools list
+      const res = await api.get(`/api/elevenlabs/tools/${tenantId}`);
+      const all = res.data?.tools || res.data || [];
+      setWsTools(Array.isArray(all) ? all : []);
+    } catch (e: any) {
+      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao criar tool' });
+    } finally {
+      setCreatingTool(false);
+    }
+  };
+
   // ─── Knowledge Management ─────────────────────────────
 
   const agentKB = agent?.conversation_config?.agent?.knowledge_base || [];
   const agentKBIds = useMemo(() => new Set(agentKB.map(k => k.id).filter(Boolean)), [agentKB]);
 
-  // Map kb_id -> workspace KB info for name resolution
   const kbNameMap = useMemo(() => {
     const map: Record<string, KBDoc> = {};
     for (const d of wsKB) {
-      const id = d.id || d.knowledge_base_id || '';
+      const id = getKBId(d);
       if (id) map[id] = d;
     }
     return map;
@@ -307,6 +348,7 @@ export default function AgentDetailPage() {
 
   const openKBModal = async () => {
     setShowKBModal(true);
+    setShowCreateKB(false);
     setKBLoading(true);
     setSelectedKBIds(new Set());
     try {
@@ -361,15 +403,28 @@ export default function AgentDetailPage() {
     }
   };
 
-  // ─── Variables ─────────────────────────────────────────
-
-  const extractedVars = useMemo(() => {
-    const prompt = form.system_prompt || '';
-    const matches = prompt.match(/\{\{(\w+)\}\}/g) || [];
-    return [...new Set(matches.map(m => m.replace(/\{\{|\}\}/g, '')))];
-  }, [form.system_prompt]);
-
-  const systemVars = ['system__time', 'system__call_duration_secs', 'system__caller_id'];
+  const createKBDoc = async () => {
+    if (!newKB.name || !newKB.content) return;
+    setCreatingKB(true);
+    try {
+      await api.post(`/api/elevenlabs/knowledge/${tenantId}`, {
+        name: newKB.name,
+        type: newKB.type,
+        ...(newKB.type === 'url' ? { url: newKB.content } : { text: newKB.content }),
+      });
+      setMsg({ type: 'success', text: `Documento "${newKB.name}" criado` });
+      setNewKB({ name: '', type: 'text', content: '' });
+      setShowCreateKB(false);
+      // Reload KB list
+      const res = await api.get(`/api/elevenlabs/knowledge/${tenantId}`);
+      const all = res.data?.knowledge_base || res.data?.documents || res.data || [];
+      setWsKB(Array.isArray(all) ? all : []);
+    } catch (e: any) {
+      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao criar documento' });
+    } finally {
+      setCreatingKB(false);
+    }
+  };
 
   // ─── Render ───────────────────────────────────────────
 
@@ -401,7 +456,6 @@ export default function AgentDetailPage() {
     { key: 'config', label: 'Configuracao', icon: Settings2 },
     { key: 'tools', label: 'Tools', icon: Wrench, count: agentTools.length },
     { key: 'knowledge', label: 'Conhecimento', icon: BookOpen, count: agentKB.length },
-    { key: 'variables', label: 'Variaveis', icon: Variable, count: extractedVars.length },
   ];
 
   return (
@@ -485,7 +539,6 @@ export default function AgentDetailPage() {
               value={form.system_prompt}
               onChange={e => setForm(f => ({ ...f, system_prompt: e.target.value }))}
             />
-            <p className="text-xs text-gray-400 mt-1">Use {'{{variavel}}'} para variaveis dinamicas</p>
           </div>
 
           <div>
@@ -509,7 +562,7 @@ export default function AgentDetailPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Modelo</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Modelo LLM</label>
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={form.model}
@@ -520,7 +573,7 @@ export default function AgentDetailPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Temperature: {form.temperature.toFixed(2)}
@@ -546,15 +599,6 @@ export default function AgentDetailPage() {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={form.max_tokens}
                 onChange={e => setForm(f => ({ ...f, max_tokens: parseInt(e.target.value) || 400 }))}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Duracao Max (seg)</label>
-              <input
-                type="number"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                value={form.max_duration_seconds}
-                onChange={e => setForm(f => ({ ...f, max_duration_seconds: parseInt(e.target.value) || 300 }))}
               />
             </div>
           </div>
@@ -595,25 +639,28 @@ export default function AgentDetailPage() {
             <div className="space-y-2">
               {agentTools.map((tool, i) => {
                 const resolved = tool.tool_id ? toolNameMap[tool.tool_id] : undefined;
-                const displayName = tool.name || resolved?.name || tool.tool_id || `Tool ${i + 1}`;
-                const displayDesc = tool.description || resolved?.description;
+                const displayName = tool.name || getToolName(resolved as any) || tool.tool_id || `Tool ${i + 1}`;
+                const displayDesc = tool.description || (resolved ? getToolDesc(resolved) : '');
                 return (
-                <div key={tool.tool_id || i} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{displayName}</p>
-                    {displayDesc && <p className="text-xs text-gray-500 mt-0.5">{displayDesc}</p>}
-                    {tool.tool_id && <p className="text-xs text-gray-400 font-mono mt-0.5">{tool.tool_id}</p>}
+                  <div key={tool.tool_id || i} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-900">{displayName}</p>
+                      {displayDesc && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{displayDesc}</p>}
+                      {resolved && getToolUrl(resolved) && (
+                        <p className="text-xs text-gray-400 font-mono mt-0.5 truncate">{getToolUrl(resolved)}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => tool.tool_id && removeTool(tool.tool_id)}
+                      disabled={saving}
+                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded ml-2"
+                      title="Desvincular"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
-                  <button
-                    onClick={() => tool.tool_id && removeTool(tool.tool_id)}
-                    disabled={saving}
-                    className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
-                    title="Desvincular"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                ); })}
+                );
+              })}
             </div>
           )}
         </div>
@@ -644,71 +691,24 @@ export default function AgentDetailPage() {
                 const resolved = doc.id ? kbNameMap[doc.id] : undefined;
                 const displayName = doc.name || resolved?.name || doc.id || `Doc ${i + 1}`;
                 return (
-                <div key={doc.id || i} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{displayName}</p>
-                    {doc.id && <p className="text-xs text-gray-400 font-mono mt-0.5">{doc.id}</p>}
+                  <div key={doc.id || i} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{displayName}</p>
+                      {doc.id && <p className="text-xs text-gray-400 font-mono mt-0.5">{doc.id}</p>}
+                    </div>
+                    <button
+                      onClick={() => doc.id && removeKB(doc.id)}
+                      disabled={saving}
+                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                      title="Desvincular"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
-                  <button
-                    onClick={() => doc.id && removeKB(doc.id)}
-                    disabled={saving}
-                    className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
-                    title="Desvincular"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                ); })}
+                );
+              })}
             </div>
           )}
-        </div>
-      )}
-
-      {/* ─── Tab: Variables ──────────────────────────────── */}
-      {tab === 'variables' && (
-        <div>
-          {extractedVars.length > 0 && (
-            <div className="mb-6">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">Variaveis do Prompt</h3>
-              <div className="space-y-2">
-                {extractedVars.map(v => (
-                  <div key={v} className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg">
-                    <code className="text-sm font-mono text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{`{{${v}}}`}</code>
-                    <span className="text-sm text-gray-500 flex-1">{v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <h3 className="text-sm font-medium text-gray-700 mb-3">Variaveis do Sistema</h3>
-            <div className="space-y-2">
-              {systemVars.map(v => (
-                <div key={v} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                  <code className="text-sm font-mono text-gray-600 bg-gray-100 px-2 py-0.5 rounded">{`{{${v}}}`}</code>
-                  <span className="text-xs text-gray-400">Sistema</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {extractedVars.length === 0 && (
-            <div className="text-center py-8 text-gray-400 mt-6 border-t">
-              <Variable size={32} className="mx-auto mb-2 opacity-40" />
-              <p className="text-sm">Nenhuma variavel custom no prompt</p>
-              <p className="text-xs mt-1">{'Use {{nome}} no prompt para criar variaveis'}</p>
-            </div>
-          )}
-
-          <div className="mt-6 pt-4 border-t">
-            <button
-              onClick={() => router.push('/dash/chat-lab')}
-              className="text-sm text-blue-600 hover:underline"
-            >
-              Testar no Chat Lab →
-            </button>
-          </div>
         </div>
       )}
 
@@ -717,56 +717,97 @@ export default function AgentDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-lg font-bold">Adicionar Tools</h2>
+              <h2 className="text-lg font-bold">{showCreateTool ? 'Criar Nova Tool' : 'Adicionar Tools'}</h2>
               <button onClick={() => setShowToolModal(false)} className="p-1 hover:bg-gray-100 rounded">
                 <X size={18} />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
-              {toolsLoading ? (
+              {showCreateTool ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Nome</label>
+                    <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Ex: send_whatsapp_order"
+                      value={newTool.name} onChange={e => setNewTool(f => ({ ...f, name: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Descricao</label>
+                    <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[60px]" placeholder="O que essa tool faz..."
+                      value={newTool.description} onChange={e => setNewTool(f => ({ ...f, description: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">URL do Webhook</label>
+                    <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="https://..."
+                      value={newTool.url} onChange={e => setNewTool(f => ({ ...f, url: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Metodo</label>
+                    <select className="w-full border rounded-lg px-3 py-2 text-sm"
+                      value={newTool.method} onChange={e => setNewTool(f => ({ ...f, method: e.target.value }))}>
+                      <option value="POST">POST</option>
+                      <option value="GET">GET</option>
+                      <option value="PUT">PUT</option>
+                    </select>
+                  </div>
+                </div>
+              ) : toolsLoading ? (
                 <div className="flex items-center justify-center py-10">
                   <Loader2 className="animate-spin text-blue-500" size={24} />
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {wsTools.filter(t => !agentToolIds.has(t.tool_id || t.id || '')).map(tool => {
-                    const tid = tool.tool_id || tool.id || '';
+                  {wsTools.filter(t => !agentToolIds.has(getToolId(t))).map(tool => {
+                    const tid = getToolId(tool);
                     return (
                       <label key={tid} className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={selectedToolIds.has(tid)}
-                          onChange={() => toggleTool(tid)}
-                          className="mt-0.5"
-                        />
+                        <input type="checkbox" checked={selectedToolIds.has(tid)} onChange={() => toggleTool(tid)} className="mt-0.5" />
                         <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-900">{tool.name}</p>
-                          {tool.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{tool.description}</p>}
-                          {tool.api_schema?.url && <p className="text-xs text-gray-400 font-mono mt-0.5 truncate">{tool.api_schema.url}</p>}
+                          <p className="text-sm font-medium text-gray-900">{getToolName(tool)}</p>
+                          {getToolDesc(tool) && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{getToolDesc(tool)}</p>}
+                          {getToolUrl(tool) && <p className="text-xs text-gray-400 font-mono mt-0.5 truncate">{getToolUrl(tool)}</p>}
                         </div>
                       </label>
                     );
                   })}
-                  {wsTools.filter(t => !agentToolIds.has(t.tool_id || t.id || '')).length === 0 && (
+                  {wsTools.filter(t => !agentToolIds.has(getToolId(t))).length === 0 && (
                     <p className="text-sm text-gray-400 text-center py-6">Todas as tools ja estao vinculadas</p>
                   )}
                 </div>
               )}
             </div>
 
-            <div className="flex justify-end gap-2 p-4 border-t">
-              <button onClick={() => setShowToolModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
-                Cancelar
-              </button>
-              <button
-                onClick={addTools}
-                disabled={selectedToolIds.size === 0 || saving}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {saving && <Loader2 size={14} className="animate-spin" />}
-                Vincular ({selectedToolIds.size})
-              </button>
+            <div className="flex justify-between gap-2 p-4 border-t">
+              <div>
+                {!showCreateTool && (
+                  <button onClick={() => setShowCreateTool(true)} className="flex items-center gap-1 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg">
+                    <Plus size={14} /> Criar Nova
+                  </button>
+                )}
+                {showCreateTool && (
+                  <button onClick={() => setShowCreateTool(false)} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800">
+                    ← Voltar
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowToolModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                  Cancelar
+                </button>
+                {showCreateTool ? (
+                  <button onClick={createTool} disabled={!newTool.name || !newTool.url || creatingTool}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                    {creatingTool && <Loader2 size={14} className="animate-spin" />}
+                    Criar Tool
+                  </button>
+                ) : (
+                  <button onClick={addTools} disabled={selectedToolIds.size === 0 || saving}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                    {saving && <Loader2 size={14} className="animate-spin" />}
+                    Vincular ({selectedToolIds.size})
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -777,29 +818,53 @@ export default function AgentDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-lg font-bold">Adicionar Documentos</h2>
+              <h2 className="text-lg font-bold">{showCreateKB ? 'Criar Documento' : 'Adicionar Documentos'}</h2>
               <button onClick={() => setShowKBModal(false)} className="p-1 hover:bg-gray-100 rounded">
                 <X size={18} />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
-              {kbLoading ? (
+              {showCreateKB ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Nome</label>
+                    <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Ex: Cardápio Gianni"
+                      value={newKB.name} onChange={e => setNewKB(f => ({ ...f, name: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
+                    <select className="w-full border rounded-lg px-3 py-2 text-sm"
+                      value={newKB.type} onChange={e => setNewKB(f => ({ ...f, type: e.target.value as 'text' | 'url' }))}>
+                      <option value="text">Texto</option>
+                      <option value="url">URL</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      {newKB.type === 'url' ? 'URL' : 'Conteudo'}
+                    </label>
+                    {newKB.type === 'url' ? (
+                      <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="https://..."
+                        value={newKB.content} onChange={e => setNewKB(f => ({ ...f, content: e.target.value }))} />
+                    ) : (
+                      <textarea className="w-full border rounded-lg px-3 py-2 text-sm font-mono min-h-[120px]"
+                        placeholder="Cole o conteudo aqui..."
+                        value={newKB.content} onChange={e => setNewKB(f => ({ ...f, content: e.target.value }))} />
+                    )}
+                  </div>
+                </div>
+              ) : kbLoading ? (
                 <div className="flex items-center justify-center py-10">
                   <Loader2 className="animate-spin text-blue-500" size={24} />
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {wsKB.filter(d => !agentKBIds.has(d.id || d.knowledge_base_id || '')).map(doc => {
-                    const did = doc.id || doc.knowledge_base_id || '';
+                  {wsKB.filter(d => !agentKBIds.has(getKBId(d))).map(doc => {
+                    const did = getKBId(doc);
                     return (
                       <label key={did} className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={selectedKBIds.has(did)}
-                          onChange={() => toggleKB(did)}
-                          className="mt-0.5"
-                        />
+                        <input type="checkbox" checked={selectedKBIds.has(did)} onChange={() => toggleKB(did)} className="mt-0.5" />
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-gray-900">{doc.name || did}</p>
                           {doc.type && <span className="text-xs text-gray-400">{doc.type}</span>}
@@ -807,25 +872,44 @@ export default function AgentDetailPage() {
                       </label>
                     );
                   })}
-                  {wsKB.filter(d => !agentKBIds.has(d.id || d.knowledge_base_id || '')).length === 0 && (
+                  {wsKB.filter(d => !agentKBIds.has(getKBId(d))).length === 0 && (
                     <p className="text-sm text-gray-400 text-center py-6">Todos os documentos ja estao vinculados</p>
                   )}
                 </div>
               )}
             </div>
 
-            <div className="flex justify-end gap-2 p-4 border-t">
-              <button onClick={() => setShowKBModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
-                Cancelar
-              </button>
-              <button
-                onClick={addKBDocs}
-                disabled={selectedKBIds.size === 0 || saving}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {saving && <Loader2 size={14} className="animate-spin" />}
-                Vincular ({selectedKBIds.size})
-              </button>
+            <div className="flex justify-between gap-2 p-4 border-t">
+              <div>
+                {!showCreateKB && (
+                  <button onClick={() => setShowCreateKB(true)} className="flex items-center gap-1 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg">
+                    <Upload size={14} /> Criar Novo
+                  </button>
+                )}
+                {showCreateKB && (
+                  <button onClick={() => setShowCreateKB(false)} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800">
+                    ← Voltar
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowKBModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                  Cancelar
+                </button>
+                {showCreateKB ? (
+                  <button onClick={createKBDoc} disabled={!newKB.name || !newKB.content || creatingKB}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                    {creatingKB && <Loader2 size={14} className="animate-spin" />}
+                    Criar Documento
+                  </button>
+                ) : (
+                  <button onClick={addKBDocs} disabled={selectedKBIds.size === 0 || saving}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                    {saving && <Loader2 size={14} className="animate-spin" />}
+                    Vincular ({selectedKBIds.size})
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

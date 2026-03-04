@@ -100,7 +100,7 @@ export default function ConfigIndexPage() {
       title: t.nav_agents,
       description: t.agents_subtitle,
       icon: Users,
-      href: '/dash/agents',
+      href: '/dash/agents-config',
       bgColor: 'bg-pink-100',
       textColor: 'text-pink-600',
     },
