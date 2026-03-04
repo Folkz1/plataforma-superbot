@@ -9,9 +9,14 @@ import {
 // Hard-coded experimental agents (add more as needed)
 const AGENTS = [
   {
-    id: 'agent_6301kjx27k33emyrb8qj91kre8sx',
-    name: '[GIANNI] Giulia TEXT (Grok)',
-    description: 'Agente texto experimental - Famiglia Gianni com x-ai/grok-4.1-fast via OpenRouter',
+    id: 'agent_7501kjx5qhp1fvcagh87n4h36dsx',
+    name: '[GIANNI] Giulia TEXT',
+    description: 'Agente texto - Famiglia Gianni com gpt-4.1-mini + 5 tools + 6 KB docs',
+  },
+  {
+    id: 'agent_8201kg0y1kdtfpeabda5311vmp81',
+    name: '[GIANNI] Giulia WEB (voz)',
+    description: 'Agente WEB com voz - Famiglia Gianni (gpt-4.1-mini)',
   },
 ];
 
@@ -130,16 +135,19 @@ export default function ChatLabPage() {
           }
 
           case 'agent_response': {
-            // Final response (backup if streaming parts missed)
+            // Final consolidated response - only use if streaming didn't capture it
             const text = msg.agent_response_event?.agent_response?.trim() || '';
             setMessages(prev => {
               const last = prev[prev.length - 1];
+              // If streaming is still active, finalize it with the full text
               if (last?.role === 'assistant' && last.streaming) {
                 const updated = [...prev];
                 updated[updated.length - 1] = { ...last, text, streaming: false };
                 return updated;
               }
-              if (last?.role === 'assistant' && last.text === text) return prev;
+              // If last assistant message already has content, skip (streaming already handled it)
+              if (last?.role === 'assistant' && last.text) return prev;
+              // No streaming happened - add as new message
               return [...prev, { role: 'assistant', text, timestamp: new Date() }];
             });
             break;
