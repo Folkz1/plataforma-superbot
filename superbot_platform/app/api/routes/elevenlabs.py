@@ -39,6 +39,12 @@ class AgentUpdate(BaseModel):
     system_prompt: Optional[str] = None
     first_message: Optional[str] = None
     language: Optional[str] = None
+    model: Optional[str] = None
+    tool_ids: Optional[List[str]] = None
+    knowledge_base_ids: Optional[List[str]] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    max_duration_seconds: Optional[int] = None
 
 
 class ToolConfig(BaseModel):
@@ -500,20 +506,46 @@ async def get_agent(
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
-    """Get agent details"""
+    """Get agent details enriched with DB metadata (_configured_*)"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
-    
+
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{ELEVENLABS_BASE_URL}/convai/agents/{agent_id}",
                 headers={"xi-api-key": api_key}
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+    # Enrich with DB metadata from project_voice_agents
+    try:
+        project_id = await resolve_project_id_from_client_id(client_id, db)
+        result = await db.execute(
+            select(ProjectVoiceAgent)
+            .where(
+                and_(
+                    ProjectVoiceAgent.project_id == project_id,
+                    ProjectVoiceAgent.agent_id == agent_id,
+                )
+            )
+            .order_by(desc(ProjectVoiceAgent.updated_at))
+        )
+        row = result.scalars().first()
+        if row:
+            data["_configured_label"] = row.label
+            data["_configured_channel_type"] = row.channel_type
+            data["_configured_active"] = bool(row.active)
+    except Exception:
+        pass
+
+    return data
 
 
 @router.post("/agents/{client_id}")
@@ -568,32 +600,66 @@ async def update_agent(
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
-    """Update agent configuration"""
+    """Update agent configuration (prompt, tools, KB, LLM params)"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
-    
-    # Build update payload
-    payload = {}
-    
-    if data.system_prompt:
-        payload["conversation_config"] = {
-            "agent": {
-                "prompt": {"prompt": data.system_prompt}
-            }
-        }
-    
+
+    # Build nested payload for ElevenLabs API
+    payload: Dict[str, Any] = {}
+
+    def ensure_path(*keys: str) -> Dict[str, Any]:
+        """Ensure nested dict path exists and return the leaf dict."""
+        d = payload
+        for k in keys:
+            if k not in d:
+                d[k] = {}
+            d = d[k]
+        return d
+
+    if data.system_prompt is not None:
+        prompt_cfg = ensure_path("conversation_config", "agent", "prompt")
+        prompt_cfg["prompt"] = data.system_prompt
+
     if data.first_message is not None:
-        if "conversation_config" not in payload:
-            payload["conversation_config"] = {"agent": {}}
-        payload["conversation_config"]["agent"]["first_message"] = data.first_message
-    
-    if data.name:
-        payload["platform_settings"] = {
-            "widget_settings": {"name": data.name}
-        }
-    
+        agent_cfg = ensure_path("conversation_config", "agent")
+        agent_cfg["first_message"] = data.first_message
+
+    if data.language is not None:
+        agent_cfg = ensure_path("conversation_config", "agent")
+        agent_cfg["language"] = data.language
+
+    if data.name is not None:
+        widget = ensure_path("platform_settings", "widget_settings")
+        widget["name"] = data.name
+
+    if data.model is not None:
+        llm_cfg = ensure_path("conversation_config", "agent", "prompt", "llm")
+        llm_cfg["model_id"] = data.model
+
+    if data.temperature is not None:
+        llm_cfg = ensure_path("conversation_config", "agent", "prompt", "llm")
+        llm_cfg["model_temperature"] = data.temperature
+
+    if data.max_tokens is not None:
+        llm_cfg = ensure_path("conversation_config", "agent", "prompt", "llm")
+        llm_cfg["max_tokens"] = data.max_tokens
+
+    if data.max_duration_seconds is not None:
+        conv_cfg = ensure_path("conversation_config")
+        conv_cfg["max_duration_seconds"] = data.max_duration_seconds
+
+    if data.tool_ids is not None:
+        agent_cfg = ensure_path("conversation_config", "agent")
+        agent_cfg["tools"] = [{"type": "tool_id", "tool_id": tid} for tid in data.tool_ids]
+
+    if data.knowledge_base_ids is not None:
+        agent_cfg = ensure_path("conversation_config", "agent")
+        agent_cfg["knowledge_base"] = [
+            {"type": "knowledge_base", "id": kid} for kid in data.knowledge_base_ids
+        ]
+
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.patch(
                 f"{ELEVENLABS_BASE_URL}/convai/agents/{agent_id}",
                 headers={"xi-api-key": api_key, "Content-Type": "application/json"},
@@ -601,6 +667,9 @@ async def update_agent(
             )
             response.raise_for_status()
             return response.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
 
@@ -624,6 +693,31 @@ async def delete_agent(
             )
             response.raise_for_status()
             return {"success": True, "message": "Agent removido"}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.get("/workspace-agents/{client_id}")
+async def list_workspace_agents(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """List ALL agents in the workspace (unfiltered) for 'Link Agent' modal."""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{ELEVENLABS_BASE_URL}/convai/agents",
+                headers={"xi-api-key": api_key},
+                params={"page_size": 100}
+            )
+            response.raise_for_status()
+            data = response.json()
+            agents_list = data.get("agents", [])
+            return {"agents": agents_list}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
 
