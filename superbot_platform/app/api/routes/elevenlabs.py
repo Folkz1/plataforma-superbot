@@ -661,7 +661,7 @@ async def add_agent_tool(
     """Add tool to agent"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
-    
+
     # Get current agent config
     try:
         async with httpx.AsyncClient() as client:
@@ -672,10 +672,10 @@ async def add_agent_tool(
             )
             get_response.raise_for_status()
             agent_data = get_response.json()
-            
+
             # Add tool to tools array
             tools = agent_data.get("conversation_config", {}).get("agent", {}).get("tools", [])
-            
+
             # Build tool config
             new_tool = {
                 "type": tool.type,
@@ -687,9 +687,9 @@ async def add_agent_tool(
                     "request_body_schema": tool.parameters
                 }
             }
-            
+
             tools.append(new_tool)
-            
+
             # Update agent
             update_payload = {
                 "conversation_config": {
@@ -698,20 +698,269 @@ async def add_agent_tool(
                     }
                 }
             }
-            
+
             update_response = await client.patch(
                 f"{ELEVENLABS_BASE_URL}/convai/agents/{agent_id}",
                 headers={"xi-api-key": api_key, "Content-Type": "application/json"},
                 json=update_payload
             )
             update_response.raise_for_status()
-            
+
             return {
                 "success": True,
                 "message": f"Tool '{tool.name}' adicionada",
                 "agent": update_response.json()
             }
 
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+# ─── Workspace Tools CRUD (proxy to ElevenLabs /v1/convai/tools) ─────
+
+class WorkspaceToolCreate(BaseModel):
+    name: str
+    description: str
+    type: str = "webhook"
+    url: Optional[str] = None
+    method: Optional[str] = "POST"
+    headers: Optional[Dict[str, str]] = None
+    body_schema: Optional[Dict[str, Any]] = None
+    parameters: Optional[Dict[str, Any]] = None
+
+
+@router.get("/tools/{client_id}")
+async def list_workspace_tools(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """List all workspace tools from ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{ELEVENLABS_BASE_URL}/convai/tools",
+                headers={"xi-api-key": api_key}
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.post("/tools/{client_id}")
+async def create_workspace_tool(
+    client_id: str,
+    data: WorkspaceToolCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Create a workspace tool in ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    payload: Dict[str, Any] = {
+        "name": data.name,
+        "description": data.description,
+        "type": data.type,
+    }
+
+    if data.type == "webhook" and data.url:
+        payload["api_schema"] = {
+            "url": data.url,
+            "method": data.method or "POST",
+        }
+        if data.headers:
+            payload["api_schema"]["headers"] = data.headers
+        if data.body_schema:
+            payload["api_schema"]["request_body_schema"] = data.body_schema
+    elif data.parameters:
+        payload["parameters"] = data.parameters
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{ELEVENLABS_BASE_URL}/convai/tools",
+                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.patch("/tools/{client_id}/{tool_id}")
+async def update_workspace_tool(
+    client_id: str,
+    tool_id: str,
+    data: WorkspaceToolCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Update a workspace tool in ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    payload: Dict[str, Any] = {
+        "name": data.name,
+        "description": data.description,
+    }
+
+    if data.type == "webhook" and data.url:
+        payload["api_schema"] = {
+            "url": data.url,
+            "method": data.method or "POST",
+        }
+        if data.headers:
+            payload["api_schema"]["headers"] = data.headers
+        if data.body_schema:
+            payload["api_schema"]["request_body_schema"] = data.body_schema
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(
+                f"{ELEVENLABS_BASE_URL}/convai/tools/{tool_id}",
+                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.delete("/tools/{client_id}/{tool_id}")
+async def delete_workspace_tool(
+    client_id: str,
+    tool_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Delete a workspace tool from ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(
+                f"{ELEVENLABS_BASE_URL}/convai/tools/{tool_id}",
+                headers={"xi-api-key": api_key}
+            )
+            response.raise_for_status()
+            return {"success": True, "message": "Tool removida"}
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+# ─── Knowledge Base CRUD (proxy to ElevenLabs /v1/convai/knowledge-base) ─────
+
+@router.get("/knowledge/{client_id}")
+async def list_knowledge_base(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """List all knowledge base documents from ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{ELEVENLABS_BASE_URL}/convai/knowledge-base",
+                headers={"xi-api-key": api_key}
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.post("/knowledge/{client_id}")
+async def create_knowledge_doc(
+    client_id: str,
+    data: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Upload a knowledge base document to ElevenLabs.
+    Accepts: { type: 'text'|'url', name: str, text?: str, url?: str }
+    """
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    doc_type = data.get("type", "text")
+    name = data.get("name", "Documento")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            if doc_type == "url":
+                payload = {
+                    "type": "url",
+                    "name": name,
+                    "url": data.get("url", ""),
+                }
+                response = await client.post(
+                    f"{ELEVENLABS_BASE_URL}/convai/knowledge-base",
+                    headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+                    json=payload
+                )
+            else:
+                # Text or file upload via multipart
+                text_content = data.get("text", data.get("content", ""))
+                files = {"file": (f"{name}.txt", text_content.encode("utf-8"), "text/plain")}
+                form_data = {"name": name}
+                response = await client.post(
+                    f"{ELEVENLABS_BASE_URL}/convai/knowledge-base",
+                    headers={"xi-api-key": api_key},
+                    files=files,
+                    data=form_data
+                )
+
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.delete("/knowledge/{client_id}/{doc_id}")
+async def delete_knowledge_doc(
+    client_id: str,
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Delete a knowledge base document from ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(
+                f"{ELEVENLABS_BASE_URL}/convai/knowledge-base/{doc_id}",
+                headers={"xi-api-key": api_key}
+            )
+            response.raise_for_status()
+            return {"success": True, "message": "Documento removido"}
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
 
