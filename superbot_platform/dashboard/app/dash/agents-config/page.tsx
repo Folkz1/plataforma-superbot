@@ -52,6 +52,11 @@ export default function AgentsConfigPage() {
   const [linkForm, setLinkForm] = useState({ agent_id: '', label: '', channel_type: 'phone' });
   const [linking, setLinking] = useState(false);
 
+  // Create agent modal
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', system_prompt: '', first_message: '', language: 'pt', voice_id: 'pFZP5JQG7iQjIQuC4Bku' });
+
   // ─── Init ──────────────────────────────────────────────
 
   useEffect(() => {
@@ -76,8 +81,8 @@ export default function AgentsConfigPage() {
         name: a._configured_label || a.name || a.platform_settings?.widget_settings?.name || a.agent_id,
         channel_type: a._configured_channel_type || 'phone',
         active: a._configured_active !== false,
-        tools_count: a.conversation_config?.agent?.tools?.length || 0,
-        kb_count: a.conversation_config?.agent?.knowledge_base?.length || 0,
+        tools_count: a.conversation_config?.agent?.prompt?.tools?.length || 0,
+        kb_count: a.conversation_config?.agent?.prompt?.knowledge_base?.length || 0,
       }));
       setAgents(cards);
     } catch {
@@ -137,6 +142,41 @@ export default function AgentsConfigPage() {
     }
   };
 
+  // ─── Create Agent ──────────────────────────────────────
+
+  const createAgent = async () => {
+    if (!createForm.name || !createForm.system_prompt) return;
+    setCreating(true);
+    try {
+      const res = await api.post(`/api/elevenlabs/agents/${tenantId}`, {
+        name: createForm.name,
+        system_prompt: createForm.system_prompt,
+        first_message: createForm.first_message,
+        language: createForm.language,
+        voice_id: createForm.voice_id,
+      });
+      const newAgentId = res.data?.agent_id;
+      // Link to tenant
+      if (newAgentId) {
+        await api.post(`/api/elevenlabs/active-agents/${tenantId}`, {
+          agent_id: newAgentId,
+          label: createForm.name,
+          channel_type: 'text',
+          active: true,
+        });
+      }
+      setMsg({ type: 'success', text: 'Agente criado com sucesso' });
+      setShowCreateModal(false);
+      setCreateForm({ name: '', system_prompt: '', first_message: '', language: 'pt', voice_id: 'pFZP5JQG7iQjIQuC4Bku' });
+      loadAgents(tenantId);
+      if (newAgentId) router.push(`/dash/agents-config/${newAgentId}`);
+    } catch (e: any) {
+      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao criar agente' });
+    } finally {
+      setCreating(false);
+    }
+  };
+
   // ─── Render ───────────────────────────────────────────
 
   const ChannelBadge = ({ type }: { type: string }) => {
@@ -170,7 +210,7 @@ export default function AgentsConfigPage() {
             Vincular Agente
           </button>
           <button
-            onClick={() => router.push('/dash/agents-config/new')}
+            onClick={() => setShowCreateModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
           >
             <Plus size={16} />
@@ -329,6 +369,56 @@ export default function AgentsConfigPage() {
               >
                 {linking && <Loader2 size={14} className="animate-spin" />}
                 Vincular
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Agent Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+            <h2 className="text-lg font-bold mb-4">Criar Novo Agente</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+                <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ex: Giulia Atendimento" value={createForm.name}
+                  onChange={e => setCreateForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">System Prompt</label>
+                <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono min-h-[100px]"
+                  placeholder="Voce e um agente de atendimento..." value={createForm.system_prompt}
+                  onChange={e => setCreateForm(f => ({ ...f, system_prompt: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Primeira Mensagem</label>
+                <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ola, como posso ajudar?" value={createForm.first_message}
+                  onChange={e => setCreateForm(f => ({ ...f, first_message: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Idioma</label>
+                <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  value={createForm.language} onChange={e => setCreateForm(f => ({ ...f, language: e.target.value }))}>
+                  <option value="pt">Portugues</option>
+                  <option value="en">English</option>
+                  <option value="es">Espanol</option>
+                  <option value="it">Italiano</option>
+                  <option value="multi">Multilingual</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                Cancelar
+              </button>
+              <button onClick={createAgent} disabled={!createForm.name || !createForm.system_prompt || creating}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                {creating && <Loader2 size={14} className="animate-spin" />}
+                Criar Agente
               </button>
             </div>
           </div>

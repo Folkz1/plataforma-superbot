@@ -649,12 +649,12 @@ async def update_agent(
         conv_cfg["max_duration_seconds"] = data.max_duration_seconds
 
     if data.tool_ids is not None:
-        agent_cfg = ensure_path("conversation_config", "agent")
-        agent_cfg["tools"] = [{"type": "tool_id", "tool_id": tid} for tid in data.tool_ids]
+        prompt_cfg = ensure_path("conversation_config", "agent", "prompt")
+        prompt_cfg["tool_ids"] = data.tool_ids
 
     if data.knowledge_base_ids is not None:
-        agent_cfg = ensure_path("conversation_config", "agent")
-        agent_cfg["knowledge_base"] = [
+        prompt_cfg = ensure_path("conversation_config", "agent", "prompt")
+        prompt_cfg["knowledge_base"] = [
             {"type": "knowledge_base", "id": kid} for kid in data.knowledge_base_ids
         ]
 

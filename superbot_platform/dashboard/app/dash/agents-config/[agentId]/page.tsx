@@ -19,11 +19,15 @@ interface AgentDetail {
   _configured_active?: boolean;
   conversation_config?: {
     agent?: {
-      prompt?: { prompt?: string; llm?: { model_id?: string; model_temperature?: number; max_tokens?: number } };
+      prompt?: {
+        prompt?: string;
+        llm?: { model_id?: string; model_temperature?: number; max_tokens?: number };
+        tools?: AgentTool[];
+        tool_ids?: string[];
+        knowledge_base?: AgentKB[];
+      };
       first_message?: string;
       language?: string;
-      tools?: AgentTool[];
-      knowledge_base?: AgentKB[];
     };
   };
   platform_settings?: { widget_settings?: { name?: string } };
@@ -237,7 +241,7 @@ export default function AgentDetailPage() {
 
   // ─── Tools Management ─────────────────────────────────
 
-  const agentTools = agent?.conversation_config?.agent?.tools || [];
+  const agentTools = agent?.conversation_config?.agent?.prompt?.tools || [];
   const agentToolIds = useMemo(() => new Set(agentTools.map(t => t.tool_id).filter(Boolean)), [agentTools]);
 
   // Map tool_id -> workspace tool info for name resolution
@@ -334,7 +338,7 @@ export default function AgentDetailPage() {
 
   // ─── Knowledge Management ─────────────────────────────
 
-  const agentKB = agent?.conversation_config?.agent?.knowledge_base || [];
+  const agentKB = agent?.conversation_config?.agent?.prompt?.knowledge_base || [];
   const agentKBIds = useMemo(() => new Set(agentKB.map(k => k.id).filter(Boolean)), [agentKB]);
 
   const kbNameMap = useMemo(() => {
