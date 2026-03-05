@@ -55,7 +55,7 @@ export default function AgentsConfigPage() {
   // Create agent modal
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', system_prompt: '', first_message: '', language: 'pt', voice_id: 'pFZP5JQG7iQjIQuC4Bku' });
+  const [createForm, setCreateForm] = useState({ name: '', system_prompt: '', first_message: '', language: 'pt', model: 'gpt-4.1-mini', channel_type: 'text' });
 
   // ─── Init ──────────────────────────────────────────────
 
@@ -148,26 +148,19 @@ export default function AgentsConfigPage() {
     if (!createForm.name || !createForm.system_prompt) return;
     setCreating(true);
     try {
+      // Backend auto-links to project_voice_agents
       const res = await api.post(`/api/elevenlabs/agents/${tenantId}`, {
         name: createForm.name,
         system_prompt: createForm.system_prompt,
         first_message: createForm.first_message,
         language: createForm.language,
-        voice_id: createForm.voice_id,
+        model: createForm.model,
+        channel_type: createForm.channel_type,
       });
       const newAgentId = res.data?.agent_id;
-      // Link to tenant
-      if (newAgentId) {
-        await api.post(`/api/elevenlabs/active-agents/${tenantId}`, {
-          agent_id: newAgentId,
-          label: createForm.name,
-          channel_type: 'text',
-          active: true,
-        });
-      }
       setMsg({ type: 'success', text: 'Agente criado com sucesso' });
       setShowCreateModal(false);
-      setCreateForm({ name: '', system_prompt: '', first_message: '', language: 'pt', voice_id: 'pFZP5JQG7iQjIQuC4Bku' });
+      setCreateForm({ name: '', system_prompt: '', first_message: '', language: 'pt', model: 'gpt-4.1-mini', channel_type: 'text' });
       loadAgents(tenantId);
       if (newAgentId) router.push(`/dash/agents-config/${newAgentId}`);
     } catch (e: any) {
@@ -399,15 +392,37 @@ export default function AgentsConfigPage() {
                   placeholder="Ola, como posso ajudar?" value={createForm.first_message}
                   onChange={e => setCreateForm(f => ({ ...f, first_message: e.target.value }))} />
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Idioma</label>
+                  <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    value={createForm.language} onChange={e => setCreateForm(f => ({ ...f, language: e.target.value }))}>
+                    <option value="pt">Portugues</option>
+                    <option value="en">English</option>
+                    <option value="es">Espanol</option>
+                    <option value="it">Italiano</option>
+                    <option value="multi">Multilingual</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Modelo LLM</label>
+                  <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    value={createForm.model} onChange={e => setCreateForm(f => ({ ...f, model: e.target.value }))}>
+                    <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4.1">GPT-4.1</option>
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                    <option value="claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                  </select>
+                </div>
+              </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Idioma</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Canal</label>
                 <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  value={createForm.language} onChange={e => setCreateForm(f => ({ ...f, language: e.target.value }))}>
-                  <option value="pt">Portugues</option>
-                  <option value="en">English</option>
-                  <option value="es">Espanol</option>
-                  <option value="it">Italiano</option>
-                  <option value="multi">Multilingual</option>
+                  value={createForm.channel_type} onChange={e => setCreateForm(f => ({ ...f, channel_type: e.target.value }))}>
+                  <option value="text">Texto (WhatsApp/Chat)</option>
+                  <option value="phone">Telefone (Voz)</option>
+                  <option value="web">Web Widget</option>
                 </select>
               </div>
             </div>

@@ -29,9 +29,11 @@ ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1"
 class AgentCreate(BaseModel):
     name: str
     system_prompt: str
-    voice_id: str
+    voice_id: Optional[str] = "pFZP5JQG7iQjIQuC4Bku"
     first_message: str = ""
     language: str = "pt"
+    model: str = "gpt-4.1-mini"
+    channel_type: str = "text"
 
 
 class AgentUpdate(BaseModel):
@@ -555,39 +557,73 @@ async def create_agent(
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
-    """Create new ElevenLabs agent"""
+    """Create new ElevenLabs agent via /convai/agents/create"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
-    
-    payload = {
+
+    # Non-english agents require turbo/flash v2_5 TTS
+    tts_model = "eleven_turbo_v2_5" if data.language != "en" else "eleven_flash_v2_5"
+
+    payload: Dict[str, Any] = {
+        "name": data.name,
         "conversation_config": {
             "agent": {
                 "prompt": {
-                    "prompt": data.system_prompt
+                    "prompt": data.system_prompt,
+                    "llm": {
+                        "model_id": data.model,
+                    },
                 },
                 "first_message": data.first_message,
-                "language": data.language
-            }
+                "language": data.language,
+            },
+            "tts": {
+                "model_id": tts_model,
+            },
         },
         "platform_settings": {
-            "widget_settings": {
-                "name": data.name
-            }
+            "widget": {
+                "variant": "compact",
+            },
         },
-        "tts_config": {
-            "voice_id": data.voice_id
-        }
     }
-    
+
+    if data.voice_id:
+        payload["conversation_config"]["tts"]["voice_id"] = data.voice_id
+
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{ELEVENLABS_BASE_URL}/convai/agents",
+                f"{ELEVENLABS_BASE_URL}/convai/agents/create",
                 headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-                json=payload
+                json=payload,
             )
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+
+            # Auto-link to project in DB
+            agent_id = result.get("agent_id")
+            if agent_id:
+                try:
+                    project_id = await resolve_project_id_from_client_id(client_id, db)
+                    row = ProjectVoiceAgent(
+                        project_id=project_id,
+                        agent_id=agent_id,
+                        label=data.name,
+                        channel_type=_normalize_channel_type(data.channel_type),
+                        active=True,
+                    )
+                    db.add(row)
+                    await db.flush()
+                    await _sync_client_agent_ids(client_id, project_id, db)
+                    await db.commit()
+                except Exception:
+                    pass
+
+            return result
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=f"Erro ElevenLabs: {detail}")
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
 
@@ -653,10 +689,37 @@ async def update_agent(
         prompt_cfg["tool_ids"] = data.tool_ids
 
     if data.knowledge_base_ids is not None:
+        # Fetch KB metadata to get correct type/name for each doc
+        kb_entries = []
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as kb_client:
+                kb_response = await kb_client.get(
+                    f"{ELEVENLABS_BASE_URL}/convai/knowledge-base",
+                    headers={"xi-api-key": api_key},
+                )
+                kb_response.raise_for_status()
+                kb_data = kb_response.json()
+                all_docs = kb_data.get("documents", kb_data.get("knowledge_base", []))
+                doc_map = {d.get("id"): d for d in all_docs if isinstance(d, dict)}
+
+                for kid in data.knowledge_base_ids:
+                    doc = doc_map.get(kid, {})
+                    # ElevenLabs requires type (file/text/url), name, id
+                    kb_entries.append({
+                        "type": doc.get("type", "file"),
+                        "name": doc.get("name", kid),
+                        "id": kid,
+                        "usage_mode": "auto",
+                    })
+        except Exception:
+            # Fallback: use 'file' type with id as name
+            kb_entries = [
+                {"type": "file", "name": kid, "id": kid, "usage_mode": "auto"}
+                for kid in data.knowledge_base_ids
+            ]
+
         prompt_cfg = ensure_path("conversation_config", "agent", "prompt")
-        prompt_cfg["knowledge_base"] = [
-            {"type": "knowledge_base", "id": kid} for kid in data.knowledge_base_ids
-        ]
+        prompt_cfg["knowledge_base"] = kb_entries
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -820,6 +883,7 @@ class WorkspaceToolCreate(BaseModel):
     method: Optional[str] = "POST"
     headers: Optional[Dict[str, str]] = None
     body_schema: Optional[Dict[str, Any]] = None
+    request_body_schema: Optional[Dict[str, Any]] = None
     parameters: Optional[Dict[str, Any]] = None
 
 
@@ -852,34 +916,50 @@ async def create_workspace_tool(
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
-    """Create a workspace tool in ElevenLabs"""
+    """Create a workspace tool in ElevenLabs (uses tool_config wrapper)"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
 
-    payload: Dict[str, Any] = {
+    # ElevenLabs requires { type, tool_config: { type, name, description, api_schema } }
+    tool_config: Dict[str, Any] = {
+        "type": data.type,
         "name": data.name,
         "description": data.description,
-        "type": data.type,
     }
 
     if data.type == "webhook" and data.url:
-        payload["api_schema"] = {
+        api_schema: Dict[str, Any] = {
             "url": data.url,
             "method": data.method or "POST",
         }
         if data.headers:
-            payload["api_schema"]["headers"] = data.headers
-        if data.body_schema:
-            payload["api_schema"]["request_body_schema"] = data.body_schema
-    elif data.parameters:
-        payload["parameters"] = data.parameters
+            api_schema["request_headers"] = data.headers
+
+        # request_body_schema: allow explicit schema or fallback to body_schema
+        rbs = data.request_body_schema or data.body_schema
+        if rbs:
+            api_schema["request_body_schema"] = rbs
+        else:
+            # Default empty schema
+            api_schema["request_body_schema"] = {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            }
+
+        tool_config["api_schema"] = api_schema
+
+    payload: Dict[str, Any] = {
+        "type": data.type,
+        "tool_config": tool_config,
+    }
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{ELEVENLABS_BASE_URL}/convai/tools",
                 headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-                json=payload
+                json=payload,
             )
             response.raise_for_status()
             return response.json()
@@ -898,31 +978,36 @@ async def update_workspace_tool(
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
 ):
-    """Update a workspace tool in ElevenLabs"""
+    """Update a workspace tool in ElevenLabs (uses tool_config wrapper)"""
     check_access(client_id, current_user)
     api_key = await get_client_elevenlabs_key(client_id, db)
 
-    payload: Dict[str, Any] = {
+    tool_config: Dict[str, Any] = {
+        "type": data.type,
         "name": data.name,
         "description": data.description,
     }
 
     if data.type == "webhook" and data.url:
-        payload["api_schema"] = {
+        api_schema: Dict[str, Any] = {
             "url": data.url,
             "method": data.method or "POST",
         }
         if data.headers:
-            payload["api_schema"]["headers"] = data.headers
-        if data.body_schema:
-            payload["api_schema"]["request_body_schema"] = data.body_schema
+            api_schema["request_headers"] = data.headers
+        rbs = data.request_body_schema or data.body_schema
+        if rbs:
+            api_schema["request_body_schema"] = rbs
+        tool_config["api_schema"] = api_schema
+
+    payload: Dict[str, Any] = {"tool_config": tool_config}
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.patch(
                 f"{ELEVENLABS_BASE_URL}/convai/tools/{tool_id}",
                 headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-                json=payload
+                json=payload,
             )
             response.raise_for_status()
             return response.json()

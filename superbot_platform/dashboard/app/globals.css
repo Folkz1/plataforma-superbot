@@ -123,3 +123,21 @@ body {
 .dark .shadow-xl {
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35) !important;
 }
+
+/* Dark mode for native form controls (select, option, input) */
+.dark select,
+.dark select option {
+  background-color: #1f2937 !important;
+  color: #e5e7eb !important;
+}
+
+.dark input,
+.dark textarea {
+  background-color: #1f2937 !important;
+  color: #e5e7eb !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #6b7280 !important;
+}

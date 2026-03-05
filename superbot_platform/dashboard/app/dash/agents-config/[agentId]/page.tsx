@@ -135,7 +135,7 @@ export default function AgentDetailPage() {
   const [toolsLoading, setToolsLoading] = useState(false);
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
   const [showCreateTool, setShowCreateTool] = useState(false);
-  const [newTool, setNewTool] = useState({ name: '', description: '', url: '', method: 'POST' });
+  const [newTool, setNewTool] = useState({ name: '', description: '', url: '', method: 'POST', bodySchemaJson: '{\n  "type": "object",\n  "properties": {},\n  "required": []\n}' });
   const [creatingTool, setCreatingTool] = useState(false);
 
   // Knowledge
@@ -314,6 +314,19 @@ export default function AgentDetailPage() {
   const createTool = async () => {
     if (!newTool.name || !newTool.url) return;
     setCreatingTool(true);
+
+    // Parse body schema JSON
+    let bodySchema: any = undefined;
+    try {
+      if (newTool.bodySchemaJson.trim()) {
+        bodySchema = JSON.parse(newTool.bodySchemaJson);
+      }
+    } catch {
+      setMsg({ type: 'error', text: 'JSON do Body Schema invalido' });
+      setCreatingTool(false);
+      return;
+    }
+
     try {
       await api.post(`/api/elevenlabs/tools/${tenantId}`, {
         name: newTool.name,
@@ -321,9 +334,10 @@ export default function AgentDetailPage() {
         type: 'webhook',
         url: newTool.url,
         method: newTool.method,
+        request_body_schema: bodySchema,
       });
       setMsg({ type: 'success', text: `Tool "${newTool.name}" criada` });
-      setNewTool({ name: '', description: '', url: '', method: 'POST' });
+      setNewTool({ name: '', description: '', url: '', method: 'POST', bodySchemaJson: '{\n  "type": "object",\n  "properties": {},\n  "required": []\n}' });
       setShowCreateTool(false);
       // Reload tools list
       const res = await api.get(`/api/elevenlabs/tools/${tenantId}`);
@@ -753,6 +767,19 @@ export default function AgentDetailPage() {
                       <option value="GET">GET</option>
                       <option value="PUT">PUT</option>
                     </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Body Schema (JSON)
+                      <span className="text-gray-400 font-normal ml-1">- Parametros que o agente envia</span>
+                    </label>
+                    <textarea
+                      className="w-full border rounded-lg px-3 py-2 text-sm font-mono min-h-[120px]"
+                      placeholder={'{\n  "type": "object",\n  "properties": {\n    "message": { "type": "string", "description": "..." }\n  },\n  "required": ["message"]\n}'}
+                      value={newTool.bodySchemaJson}
+                      onChange={e => setNewTool(f => ({ ...f, bodySchemaJson: e.target.value }))}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Define os parametros que o agente pode enviar ao webhook</p>
                   </div>
                 </div>
               ) : toolsLoading ? (
