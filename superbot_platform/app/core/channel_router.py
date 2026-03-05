@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.gemini import GeminiClient, GeminiRAGManager
 from app.integrations.elevenlabs import ElevenLabsManager
+from app.core.elevenlabs_chat import ElevenLabsChatClient
 
 logger = logging.getLogger("superbot.channel_router")
 
@@ -113,10 +114,28 @@ class ChannelRouter:
                 except (ValueError, TypeError):
                     pass
 
-        # 4. Busca contexto RAG (project_knowledge_base)
+        # 4. Try ElevenLabs Chat Mode (text agent) before Gemini
+        el_agent = await self._get_elevenlabs_text_agent(project_id)
+        if el_agent:
+            el_response = await self._process_with_elevenlabs_chat(
+                project_id=project_id,
+                agent=agent,
+                el_agent=el_agent,
+                channel=channel,
+                channel_identifier=channel_identifier,
+                sender_id=sender_id,
+                message_text=message_text,
+                state=state,
+            )
+            if el_response and el_response.get("success"):
+                return el_response
+            # If ElevenLabs failed, fall through to Gemini
+            logger.warning(f"[ELEVENLABS_CHAT] Fallback to Gemini: {el_response.get('error', 'unknown')}")
+
+        # 5. Busca contexto RAG (project_knowledge_base)
         rag_context = await self._query_rag(project_id, message_text)
 
-        # 5. Busca histórico da conversa (últimas 20 msgs)
+        # 6. Busca histórico da conversa (últimas 20 msgs)
         history = await self._get_conversation_history(
             project_id=project_id,
             channel_type=channel,
@@ -124,7 +143,7 @@ class ChannelRouter:
             limit=20
         )
 
-        # 6. Monta mensagens para o LLM
+        # 7. Monta mensagens para o LLM
         messages = self._build_messages(
             agent=agent,
             history=history,
@@ -132,10 +151,10 @@ class ChannelRouter:
             rag_context=rag_context
         )
 
-        # 7. Busca tools do agente (project_tools_knowledge)
+        # 8. Busca tools do agente (project_tools_knowledge)
         tools = await self._get_agent_tools(project_id)
 
-        # 8. Gera resposta com Gemini
+        # 9. Gera resposta com Gemini
         response = await self.gemini.chat(
             messages=messages,
             model=agent.get("llm_model", "gemini-2.0-flash"),
@@ -145,7 +164,7 @@ class ChannelRouter:
 
         tool_executed = None
 
-        # 9. Executa tools se necessário
+        # 10. Executa tools se necessário
         if response.get("tool_calls"):
             for tool_call in response["tool_calls"]:
                 tool_result = await self._execute_tool(
@@ -175,7 +194,7 @@ class ChannelRouter:
 
         response_text = response.get("text", "")
 
-        # 10. Gera áudio se configurado
+        # 11. Gera áudio se configurado
         audio_url_response = None
         if agent.get("send_audio", False) and response_text:
             try:
@@ -187,7 +206,7 @@ class ChannelRouter:
             except Exception as e:
                 logger.error(f"TTS error: {e}")
 
-        # 11. Salva resposta no histórico
+        # 12. Salva resposta no histórico
         await self._save_message(
             project_id=project_id,
             channel_type=channel,
@@ -199,7 +218,7 @@ class ChannelRouter:
             raw_payload={"model": response.get("model"), "tool": tool_executed}
         )
 
-        # 12. Atualiza conversation_state
+        # 13. Atualiza conversation_state
         await self._update_conversation_state(
             project_id=project_id,
             channel_type=channel,
@@ -217,6 +236,161 @@ class ChannelRouter:
             "citations": response.get("citations", []),
             "project_id": str(project_id),
             "access_token": agent.get("access_token")
+        }
+
+    async def _get_elevenlabs_text_agent(self, project_id) -> Optional[dict]:
+        """
+        Check if project has an ElevenLabs text agent configured.
+        Queries project_voice_agents for active text-type agent.
+        Returns {agent_id, api_key} or None.
+        """
+        try:
+            result = await self.db.execute(
+                sa_text("""
+                    SELECT pva.agent_id
+                    FROM project_voice_agents pva
+                    WHERE pva.project_id = CAST(:pid AS uuid)
+                      AND pva.channel_type = 'text'
+                      AND pva.active = true
+                    LIMIT 1
+                """),
+                {"pid": str(project_id)}
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+
+            # Get API key from clients table via project
+            key_result = await self.db.execute(
+                sa_text("""
+                    SELECT c.elevenlabs_api_key
+                    FROM clients c
+                    JOIN projects p ON p.client_id = c.id
+                    WHERE p.id = CAST(:pid AS uuid)
+                    LIMIT 1
+                """),
+                {"pid": str(project_id)}
+            )
+            key_row = key_result.mappings().first()
+            import os
+            api_key = (key_row["elevenlabs_api_key"] if key_row else None) or os.getenv("ELEVENLABS_API_KEY", "")
+
+            return {
+                "agent_id": row["agent_id"],
+                "api_key": api_key,
+            }
+        except Exception as e:
+            logger.debug(f"[ELEVENLABS_CHAT] _get_elevenlabs_text_agent error: {e}")
+            return None
+
+    async def _process_with_elevenlabs_chat(
+        self,
+        project_id,
+        agent: dict,
+        el_agent: dict,
+        channel: str,
+        channel_identifier: str,
+        sender_id: str,
+        message_text: str,
+        state: Optional[dict],
+    ) -> dict:
+        """
+        Process message using ElevenLabs Chat Mode (text-only WebSocket).
+        Handles history injection, conversation_id persistence, and saves response.
+        """
+        # Get conversation history for context
+        history = await self._get_conversation_history(
+            project_id=project_id,
+            channel_type=channel,
+            conversation_id=sender_id,
+            limit=10,
+        )
+
+        # Build history string for dynamic_variables
+        history_lines = []
+        for msg in history:
+            role = "Cliente" if msg["role"] == "user" else "Agente"
+            history_lines.append(f"{role}: {msg['content']}")
+        history_str = "\n".join(history_lines[-10:]) if history_lines else ""
+
+        # Get existing ElevenLabs conversation_id from metadata
+        el_conv_id = None
+        if state and state.get("metadata"):
+            meta = state["metadata"]
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            el_conv_id = meta.get("elevenlabs_conversation_id")
+
+        # Send message via ElevenLabs Chat Mode
+        chat_client = ElevenLabsChatClient(api_key=el_agent["api_key"])
+        result = await chat_client.send_message(
+            agent_id=el_agent["agent_id"],
+            message=message_text,
+            conversation_history=history_str,
+            conversation_id=el_conv_id,
+        )
+
+        if not result.get("success") or not result.get("text"):
+            return {"success": False, "error": result.get("error", "no response")}
+
+        response_text = result["text"]
+        new_conv_id = result.get("conversation_id")
+
+        # Persist ElevenLabs conversation_id in metadata_json
+        if new_conv_id:
+            try:
+                await self.db.execute(
+                    sa_text("""
+                        UPDATE conversation_states
+                        SET metadata_json = jsonb_set(
+                            COALESCE(metadata_json, '{}'::jsonb),
+                            '{elevenlabs_conversation_id}',
+                            to_jsonb(:conv_id::text)
+                        ),
+                        updated_at = NOW()
+                        WHERE project_id = CAST(:pid AS uuid)
+                          AND channel_type = :ct
+                          AND conversation_id = :cid
+                    """),
+                    {"pid": str(project_id), "ct": channel, "cid": sender_id, "conv_id": new_conv_id}
+                )
+            except Exception as e:
+                logger.debug(f"[ELEVENLABS_CHAT] Failed to persist conv_id: {e}")
+
+        # Save AI response to conversation_events
+        await self._save_message(
+            project_id=project_id,
+            channel_type=channel,
+            channel_identifier=channel_identifier,
+            conversation_id=sender_id,
+            direction="out",
+            message_type="ai_reply",
+            text=response_text,
+            raw_payload={"model": "elevenlabs-chat", "el_agent_id": el_agent["agent_id"]}
+        )
+
+        # Update conversation_state
+        await self._update_conversation_state(
+            project_id=project_id,
+            channel_type=channel,
+            channel_identifier=channel_identifier,
+            conversation_id=sender_id,
+            ai_response=response_text,
+            ai_state=state.get("ai_state") if state else None
+        )
+
+        return {
+            "text": response_text,
+            "audio_url": None,
+            "model_used": "elevenlabs-chat",
+            "tool_executed": None,
+            "citations": [],
+            "project_id": str(project_id),
+            "access_token": agent.get("access_token"),
+            "success": True,
         }
 
     def _build_messages(

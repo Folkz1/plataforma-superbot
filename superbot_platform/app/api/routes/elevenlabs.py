@@ -875,6 +875,14 @@ async def add_agent_tool(
 
 # ─── Workspace Tools CRUD (proxy to ElevenLabs /v1/convai/tools) ─────
 
+class ToolProperty(BaseModel):
+    id: str                          # field name (snake_case)
+    type: str = "string"             # string | number | boolean
+    value_type: str = "llm_prompt"   # llm_prompt | constant | dynamic_variable
+    description: str = ""
+    required: bool = False
+
+
 class WorkspaceToolCreate(BaseModel):
     name: str
     description: str
@@ -885,6 +893,9 @@ class WorkspaceToolCreate(BaseModel):
     body_schema: Optional[Dict[str, Any]] = None
     request_body_schema: Optional[Dict[str, Any]] = None
     parameters: Optional[Dict[str, Any]] = None
+    properties: Optional[List[ToolProperty]] = None
+    response_timeout_secs: Optional[int] = None
+    disable_interruptions: Optional[bool] = None
 
 
 @router.get("/tools/{client_id}")
@@ -935,19 +946,39 @@ async def create_workspace_tool(
         if data.headers:
             api_schema["request_headers"] = data.headers
 
-        # request_body_schema: allow explicit schema or fallback to body_schema
-        rbs = data.request_body_schema or data.body_schema
-        if rbs:
-            api_schema["request_body_schema"] = rbs
-        else:
-            # Default empty schema
+        # Properties array format (preferred) or raw schema fallback
+        if data.properties is not None:
             api_schema["request_body_schema"] = {
                 "type": "object",
-                "properties": {},
-                "required": [],
+                "properties": [
+                    {
+                        "id": p.id,
+                        "type": p.type,
+                        "value_type": p.value_type,
+                        "description": p.description,
+                        "required": p.required,
+                    }
+                    for p in data.properties
+                ],
             }
+        else:
+            rbs = data.request_body_schema or data.body_schema
+            if rbs:
+                api_schema["request_body_schema"] = rbs
+            else:
+                api_schema["request_body_schema"] = {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                }
+
+        if data.response_timeout_secs is not None:
+            api_schema["response_timeout_secs"] = data.response_timeout_secs
 
         tool_config["api_schema"] = api_schema
+
+    if data.disable_interruptions is not None:
+        tool_config["disable_interruptions"] = data.disable_interruptions
 
     payload: Dict[str, Any] = {
         "type": data.type,
@@ -995,10 +1026,33 @@ async def update_workspace_tool(
         }
         if data.headers:
             api_schema["request_headers"] = data.headers
-        rbs = data.request_body_schema or data.body_schema
-        if rbs:
-            api_schema["request_body_schema"] = rbs
+
+        if data.properties is not None:
+            api_schema["request_body_schema"] = {
+                "type": "object",
+                "properties": [
+                    {
+                        "id": p.id,
+                        "type": p.type,
+                        "value_type": p.value_type,
+                        "description": p.description,
+                        "required": p.required,
+                    }
+                    for p in data.properties
+                ],
+            }
+        else:
+            rbs = data.request_body_schema or data.body_schema
+            if rbs:
+                api_schema["request_body_schema"] = rbs
+
+        if data.response_timeout_secs is not None:
+            api_schema["response_timeout_secs"] = data.response_timeout_secs
+
         tool_config["api_schema"] = api_schema
+
+    if data.disable_interruptions is not None:
+        tool_config["disable_interruptions"] = data.disable_interruptions
 
     payload: Dict[str, Any] = {"tool_config": tool_config}
 
@@ -1008,6 +1062,32 @@ async def update_workspace_tool(
                 f"{ELEVENLABS_BASE_URL}/convai/tools/{tool_id}",
                 headers={"xi-api-key": api_key, "Content-Type": "application/json"},
                 json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text if e.response else str(e)
+        raise HTTPException(status_code=e.response.status_code if e.response else 500, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Erro ElevenLabs: {str(e)}")
+
+
+@router.get("/tools/{client_id}/{tool_id}")
+async def get_workspace_tool(
+    client_id: str,
+    tool_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """Get a single workspace tool detail from ElevenLabs"""
+    check_access(client_id, current_user)
+    api_key = await get_client_elevenlabs_key(client_id, db)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{ELEVENLABS_BASE_URL}/convai/tools/{tool_id}",
+                headers={"xi-api-key": api_key}
             )
             response.raise_for_status()
             return response.json()

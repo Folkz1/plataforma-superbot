@@ -34,6 +34,9 @@ openai>=1.6.0
 # Twilio (ligações)
 twilio>=8.10.0
 
+# WebSocket (ElevenLabs Chat Mode)
+websockets>=12.0
+
 # Utilitários
 PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4

@@ -35,6 +35,7 @@ export default function Sidebar() {
     { label: 'Widget', href: '/dash/agents-config/widget', icon: <Code className="w-5 h-5" />, adminOnly: true },
     { label: t.nav_rag, href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
     { label: 'Chat Lab', href: '/dash/chat-lab', icon: <FlaskConical className="w-5 h-5" />, adminOnly: true },
+    { label: 'Usuarios', href: '/dash/users', icon: <Users className="w-5 h-5" />, managerUp: true },
     { label: t.nav_config, href: '/dash/config', icon: <Settings className="w-5 h-5" />, adminOnly: true },
   ];
 
@@ -82,7 +83,11 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {navItems.filter(item => !item.adminOnly || user?.role === 'admin').map((item) => {
+        {navItems.filter(item => {
+          if (item.adminOnly) return user?.role === 'admin';
+          if ((item as any).managerUp) return user?.role === 'admin' || user?.role === 'manager';
+          return true;
+        }).map((item) => {
           const active = isActive(item.href);
           return (
             <button
@@ -111,7 +116,7 @@ export default function Sidebar() {
           {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           {themeLabel}
         </button>
-        {user?.role === 'admin' && (
+        {(user?.role === 'admin') && (
           <button
             onClick={handleSwitchClient}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition"

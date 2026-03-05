@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import {
   Bot, ArrowLeft, Save, Loader2, AlertCircle, CheckCircle,
   Wrench, BookOpen, Settings2, Plus, X, Trash2,
-  Phone, Globe, MessageSquare, Upload
+  Phone, Globe, MessageSquare, Upload, Pencil, ChevronDown, HelpCircle
 } from 'lucide-react';
 
 // ─── Types ─────────────────────────────────────────────────
@@ -62,6 +62,14 @@ interface KBDoc {
   knowledge_base_id?: string;
   name?: string;
   type?: string;
+}
+
+interface ToolPropertyRow {
+  id: string;
+  type: 'string' | 'number' | 'boolean';
+  value_type: 'llm_prompt' | 'constant' | 'dynamic_variable';
+  description: string;
+  required: boolean;
 }
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -137,6 +145,14 @@ export default function AgentDetailPage() {
   const [showCreateTool, setShowCreateTool] = useState(false);
   const [newTool, setNewTool] = useState({ name: '', description: '', url: '', method: 'POST', bodySchemaJson: '{\n  "type": "object",\n  "properties": {},\n  "required": []\n}' });
   const [creatingTool, setCreatingTool] = useState(false);
+  const [toolProperties, setToolProperties] = useState<ToolPropertyRow[]>([]);
+  const [useJsonMode, setUseJsonMode] = useState(false);
+  const [toolTimeout, setToolTimeout] = useState(20);
+  const [toolDisableInterruptions, setToolDisableInterruptions] = useState(false);
+  const [toolHeaders, setToolHeaders] = useState<{ key: string; value: string }[]>([]);
+  const [editingToolId, setEditingToolId] = useState<string | null>(null);
+  const [loadingToolDetail, setLoadingToolDetail] = useState(false);
+  const [deletingToolId, setDeletingToolId] = useState<string | null>(null);
 
   // Knowledge
   const [wsKB, setWsKB] = useState<KBDoc[]>([]);
@@ -311,35 +327,64 @@ export default function AgentDetailPage() {
     }
   };
 
+  const resetToolForm = () => {
+    setNewTool({ name: '', description: '', url: '', method: 'POST', bodySchemaJson: '{\n  "type": "object",\n  "properties": {},\n  "required": []\n}' });
+    setToolProperties([]);
+    setUseJsonMode(false);
+    setToolTimeout(20);
+    setToolDisableInterruptions(false);
+    setToolHeaders([]);
+    setEditingToolId(null);
+  };
+
+  const buildToolPayload = () => {
+    const payload: any = {
+      name: newTool.name,
+      description: newTool.description,
+      type: 'webhook',
+      url: newTool.url,
+      method: newTool.method,
+      response_timeout_secs: toolTimeout,
+      disable_interruptions: toolDisableInterruptions,
+    };
+    if (toolHeaders.length > 0) {
+      const h: Record<string, string> = {};
+      toolHeaders.forEach(kv => { if (kv.key) h[kv.key] = kv.value; });
+      if (Object.keys(h).length > 0) payload.headers = h;
+    }
+    if (useJsonMode) {
+      try {
+        if (newTool.bodySchemaJson.trim()) {
+          payload.request_body_schema = JSON.parse(newTool.bodySchemaJson);
+        }
+      } catch {
+        return null; // invalid JSON
+      }
+    } else {
+      payload.properties = toolProperties.map(p => ({
+        id: p.id,
+        type: p.type,
+        value_type: p.value_type,
+        description: p.description,
+        required: p.required,
+      }));
+    }
+    return payload;
+  };
+
   const createTool = async () => {
     if (!newTool.name || !newTool.url) return;
-    setCreatingTool(true);
-
-    // Parse body schema JSON
-    let bodySchema: any = undefined;
-    try {
-      if (newTool.bodySchemaJson.trim()) {
-        bodySchema = JSON.parse(newTool.bodySchemaJson);
-      }
-    } catch {
+    const payload = buildToolPayload();
+    if (!payload) {
       setMsg({ type: 'error', text: 'JSON do Body Schema invalido' });
-      setCreatingTool(false);
       return;
     }
-
+    setCreatingTool(true);
     try {
-      await api.post(`/api/elevenlabs/tools/${tenantId}`, {
-        name: newTool.name,
-        description: newTool.description,
-        type: 'webhook',
-        url: newTool.url,
-        method: newTool.method,
-        request_body_schema: bodySchema,
-      });
+      await api.post(`/api/elevenlabs/tools/${tenantId}`, payload);
       setMsg({ type: 'success', text: `Tool "${newTool.name}" criada` });
-      setNewTool({ name: '', description: '', url: '', method: 'POST', bodySchemaJson: '{\n  "type": "object",\n  "properties": {},\n  "required": []\n}' });
+      resetToolForm();
       setShowCreateTool(false);
-      // Reload tools list
       const res = await api.get(`/api/elevenlabs/tools/${tenantId}`);
       const all = res.data?.tools || res.data || [];
       setWsTools(Array.isArray(all) ? all : []);
@@ -347,6 +392,91 @@ export default function AgentDetailPage() {
       setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao criar tool' });
     } finally {
       setCreatingTool(false);
+    }
+  };
+
+  const startEditTool = async (toolId: string) => {
+    setLoadingToolDetail(true);
+    setEditingToolId(toolId);
+    setShowCreateTool(true);
+    try {
+      const res = await api.get(`/api/elevenlabs/tools/${tenantId}/${toolId}`);
+      const t = res.data;
+      const tc = t?.tool_config || {};
+      const schema = tc?.api_schema || {};
+      setNewTool({
+        name: tc.name || '',
+        description: tc.description || '',
+        url: schema.url || '',
+        method: schema.method || 'POST',
+        bodySchemaJson: schema.request_body_schema ? JSON.stringify(schema.request_body_schema, null, 2) : '{}',
+      });
+      setToolTimeout(schema.response_timeout_secs ?? 20);
+      setToolDisableInterruptions(tc.disable_interruptions ?? false);
+      // Parse headers
+      const rh = schema.request_headers || {};
+      setToolHeaders(Object.entries(rh).map(([key, value]) => ({ key, value: String(value) })));
+      // Parse properties
+      const rbs = schema.request_body_schema;
+      if (rbs && Array.isArray(rbs.properties)) {
+        setUseJsonMode(false);
+        setToolProperties(rbs.properties.map((p: any) => ({
+          id: p.id || '',
+          type: p.type || 'string',
+          value_type: p.value_type || 'llm_prompt',
+          description: p.description || '',
+          required: p.required ?? false,
+        })));
+      } else {
+        setUseJsonMode(true);
+        setToolProperties([]);
+      }
+    } catch (e: any) {
+      setMsg({ type: 'error', text: 'Erro ao carregar tool' });
+      setShowCreateTool(false);
+      setEditingToolId(null);
+    } finally {
+      setLoadingToolDetail(false);
+    }
+  };
+
+  const saveEditTool = async () => {
+    if (!editingToolId || !newTool.name || !newTool.url) return;
+    const payload = buildToolPayload();
+    if (!payload) {
+      setMsg({ type: 'error', text: 'JSON do Body Schema invalido' });
+      return;
+    }
+    setCreatingTool(true);
+    try {
+      await api.patch(`/api/elevenlabs/tools/${tenantId}/${editingToolId}`, payload);
+      setMsg({ type: 'success', text: `Tool "${newTool.name}" atualizada` });
+      resetToolForm();
+      setShowCreateTool(false);
+      const res = await api.get(`/api/elevenlabs/tools/${tenantId}`);
+      const all = res.data?.tools || res.data || [];
+      setWsTools(Array.isArray(all) ? all : []);
+    } catch (e: any) {
+      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao atualizar tool' });
+    } finally {
+      setCreatingTool(false);
+    }
+  };
+
+  const deleteWorkspaceTool = async (toolId: string) => {
+    setDeletingToolId(toolId);
+    try {
+      await api.delete(`/api/elevenlabs/tools/${tenantId}/${toolId}`);
+      setMsg({ type: 'success', text: 'Tool removida do workspace' });
+      const res = await api.get(`/api/elevenlabs/tools/${tenantId}`);
+      const all = res.data?.tools || res.data || [];
+      setWsTools(Array.isArray(all) ? all : []);
+      // Reload agent to update linked tools
+      loadAgent(tenantId);
+    } catch (e: any) {
+      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao deletar tool' });
+    } finally {
+      setDeletingToolId(null);
     }
   };
 
@@ -735,7 +865,7 @@ export default function AgentDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-lg font-bold">{showCreateTool ? 'Criar Nova Tool' : 'Adicionar Tools'}</h2>
+              <h2 className="text-lg font-bold">{showCreateTool ? (editingToolId ? 'Editar Tool' : 'Criar Nova Tool') : 'Adicionar Tools'}</h2>
               <button onClick={() => setShowToolModal(false)} className="p-1 hover:bg-gray-100 rounded">
                 <X size={18} />
               </button>
@@ -743,45 +873,158 @@ export default function AgentDetailPage() {
 
             <div className="flex-1 overflow-y-auto p-4">
               {showCreateTool ? (
+                loadingToolDetail ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="animate-spin text-blue-500" size={24} />
+                  </div>
+                ) : (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Nome</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Nome <span className="text-gray-400 font-normal" title="Identificador unico da tool (snake_case)">(?)</span></label>
                     <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Ex: send_whatsapp_order"
                       value={newTool.name} onChange={e => setNewTool(f => ({ ...f, name: e.target.value }))} />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Descricao</label>
-                    <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[60px]" placeholder="O que essa tool faz..."
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Descricao <span className="text-gray-400 font-normal" title="Explique ao agente quando e por que usar essa tool">(?)</span></label>
+                    <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[60px]" placeholder="Ex: Envia pedido para o sistema de delivery..."
                       value={newTool.description} onChange={e => setNewTool(f => ({ ...f, description: e.target.value }))} />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">URL do Webhook</label>
-                    <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="https://..."
-                      value={newTool.url} onChange={e => setNewTool(f => ({ ...f, url: e.target.value }))} />
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">URL do Webhook</label>
+                      <input type="text" className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="https://n8n.example.com/webhook/..."
+                        value={newTool.url} onChange={e => setNewTool(f => ({ ...f, url: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Metodo</label>
+                      <select className="w-full border rounded-lg px-3 py-2 text-sm"
+                        value={newTool.method} onChange={e => setNewTool(f => ({ ...f, method: e.target.value }))}>
+                        <option value="POST">POST</option>
+                        <option value="GET">GET</option>
+                        <option value="PUT">PUT</option>
+                      </select>
+                    </div>
                   </div>
+
+                  {/* Parameters section */}
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Metodo</label>
-                    <select className="w-full border rounded-lg px-3 py-2 text-sm"
-                      value={newTool.method} onChange={e => setNewTool(f => ({ ...f, method: e.target.value }))}>
-                      <option value="POST">POST</option>
-                      <option value="GET">GET</option>
-                      <option value="PUT">PUT</option>
-                    </select>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-medium text-gray-600">
+                        Parametros <span className="text-gray-400 font-normal" title="Dados que o agente coleta e envia ao webhook">(?)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+                        <input type="checkbox" checked={useJsonMode} onChange={e => setUseJsonMode(e.target.checked)} className="rounded" />
+                        JSON manual
+                      </label>
+                    </div>
+
+                    {useJsonMode ? (
+                      <div>
+                        <textarea
+                          className="w-full border rounded-lg px-3 py-2 text-sm font-mono min-h-[120px]"
+                          placeholder={'{\n  "type": "object",\n  "properties": {\n    "message": { "type": "string", "description": "..." }\n  },\n  "required": ["message"]\n}'}
+                          value={newTool.bodySchemaJson}
+                          onChange={e => setNewTool(f => ({ ...f, bodySchemaJson: e.target.value }))}
+                        />
+                      </div>
+                    ) : (
+                      <div className="border rounded-lg overflow-hidden">
+                        {toolProperties.length > 0 && (
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-gray-50 text-gray-500">
+                                <th className="px-2 py-1.5 text-left font-medium">Nome</th>
+                                <th className="px-2 py-1.5 text-left font-medium">Tipo</th>
+                                <th className="px-2 py-1.5 text-left font-medium">Descricao</th>
+                                <th className="px-2 py-1.5 text-center font-medium" title="Campo obrigatorio">Req</th>
+                                <th className="px-1 py-1.5"></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {toolProperties.map((prop, idx) => (
+                                <tr key={idx} className="border-t">
+                                  <td className="px-2 py-1">
+                                    <input type="text" className="w-full border rounded px-1.5 py-1 text-xs font-mono"
+                                      placeholder="customer_name" value={prop.id}
+                                      onChange={e => { const next = [...toolProperties]; next[idx] = { ...next[idx], id: e.target.value }; setToolProperties(next); }} />
+                                  </td>
+                                  <td className="px-2 py-1">
+                                    <select className="w-full border rounded px-1 py-1 text-xs" value={prop.type}
+                                      onChange={e => { const next = [...toolProperties]; next[idx] = { ...next[idx], type: e.target.value as any }; setToolProperties(next); }}>
+                                      <option value="string">string</option>
+                                      <option value="number">number</option>
+                                      <option value="boolean">boolean</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-2 py-1">
+                                    <input type="text" className="w-full border rounded px-1.5 py-1 text-xs"
+                                      placeholder="Nome do cliente" value={prop.description}
+                                      onChange={e => { const next = [...toolProperties]; next[idx] = { ...next[idx], description: e.target.value }; setToolProperties(next); }} />
+                                  </td>
+                                  <td className="px-2 py-1 text-center">
+                                    <input type="checkbox" checked={prop.required}
+                                      onChange={e => { const next = [...toolProperties]; next[idx] = { ...next[idx], required: e.target.checked }; setToolProperties(next); }} />
+                                  </td>
+                                  <td className="px-1 py-1">
+                                    <button onClick={() => setToolProperties(p => p.filter((_, i) => i !== idx))}
+                                      className="p-0.5 text-red-400 hover:text-red-600"><X size={12} /></button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        <button onClick={() => setToolProperties(p => [...p, { id: '', type: 'string', value_type: 'llm_prompt', description: '', required: false }])}
+                          className="w-full px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 flex items-center gap-1 justify-center">
+                          <Plus size={12} /> Adicionar parametro
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Body Schema (JSON)
-                      <span className="text-gray-400 font-normal ml-1">- Parametros que o agente envia</span>
-                    </label>
-                    <textarea
-                      className="w-full border rounded-lg px-3 py-2 text-sm font-mono min-h-[120px]"
-                      placeholder={'{\n  "type": "object",\n  "properties": {\n    "message": { "type": "string", "description": "..." }\n  },\n  "required": ["message"]\n}'}
-                      value={newTool.bodySchemaJson}
-                      onChange={e => setNewTool(f => ({ ...f, bodySchemaJson: e.target.value }))}
-                    />
-                    <p className="text-xs text-gray-400 mt-1">Define os parametros que o agente pode enviar ao webhook</p>
-                  </div>
+
+                  {/* Advanced options */}
+                  <details className="border rounded-lg">
+                    <summary className="px-3 py-2 text-xs font-medium text-gray-600 cursor-pointer flex items-center gap-1 hover:bg-gray-50">
+                      <ChevronDown size={12} /> Opcoes Avancadas
+                    </summary>
+                    <div className="px-3 pb-3 space-y-3 border-t pt-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1" title="Tempo maximo de espera pela resposta do webhook">
+                            Timeout (s) <span className="text-gray-400">(?)</span>
+                          </label>
+                          <input type="number" min={1} max={120} className="w-full border rounded-lg px-3 py-1.5 text-sm"
+                            value={toolTimeout} onChange={e => setToolTimeout(parseInt(e.target.value) || 20)} />
+                        </div>
+                        <div className="flex items-end pb-1">
+                          <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer" title="Impede o agente de falar enquanto aguarda resposta da tool">
+                            <input type="checkbox" checked={toolDisableInterruptions} onChange={e => setToolDisableInterruptions(e.target.checked)} />
+                            Desabilitar interrupcoes
+                          </label>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs font-medium text-gray-600">Headers HTTP</label>
+                          <button onClick={() => setToolHeaders(h => [...h, { key: '', value: '' }])}
+                            className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-0.5"><Plus size={10} /> Adicionar</button>
+                        </div>
+                        {toolHeaders.map((h, idx) => (
+                          <div key={idx} className="flex gap-1 mb-1">
+                            <input type="text" className="flex-1 border rounded px-2 py-1 text-xs font-mono" placeholder="Authorization"
+                              value={h.key} onChange={e => { const next = [...toolHeaders]; next[idx] = { ...next[idx], key: e.target.value }; setToolHeaders(next); }} />
+                            <input type="text" className="flex-[2] border rounded px-2 py-1 text-xs font-mono" placeholder="Bearer ..."
+                              value={h.value} onChange={e => { const next = [...toolHeaders]; next[idx] = { ...next[idx], value: e.target.value }; setToolHeaders(next); }} />
+                            <button onClick={() => setToolHeaders(hh => hh.filter((_, i) => i !== idx))}
+                              className="p-0.5 text-red-400 hover:text-red-600"><X size={12} /></button>
+                          </div>
+                        ))}
+                        {toolHeaders.length === 0 && <p className="text-xs text-gray-400">Nenhum header extra</p>}
+                      </div>
+                    </div>
+                  </details>
                 </div>
+                )
               ) : toolsLoading ? (
                 <div className="flex items-center justify-center py-10">
                   <Loader2 className="animate-spin text-blue-500" size={24} />
@@ -791,14 +1034,24 @@ export default function AgentDetailPage() {
                   {wsTools.filter(t => !agentToolIds.has(getToolId(t))).map(tool => {
                     const tid = getToolId(tool);
                     return (
-                      <label key={tid} className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                        <input type="checkbox" checked={selectedToolIds.has(tid)} onChange={() => toggleTool(tid)} className="mt-0.5" />
-                        <div className="min-w-0">
+                      <div key={tid} className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                        <input type="checkbox" checked={selectedToolIds.has(tid)} onChange={() => toggleTool(tid)} className="mt-1 cursor-pointer" />
+                        <label className="min-w-0 flex-1 cursor-pointer" onClick={() => toggleTool(tid)}>
                           <p className="text-sm font-medium text-gray-900">{getToolName(tool)}</p>
                           {getToolDesc(tool) && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{getToolDesc(tool)}</p>}
                           {getToolUrl(tool) && <p className="text-xs text-gray-400 font-mono mt-0.5 truncate">{getToolUrl(tool)}</p>}
+                        </label>
+                        <div className="flex gap-1 shrink-0">
+                          <button onClick={() => startEditTool(tid)} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="Editar tool">
+                            <Pencil size={13} />
+                          </button>
+                          <button onClick={() => { if (confirm(`Deletar tool "${getToolName(tool)}" do workspace? Isso remove de TODOS os agentes.`)) deleteWorkspaceTool(tid); }}
+                            disabled={deletingToolId === tid}
+                            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Deletar do workspace">
+                            {deletingToolId === tid ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                          </button>
                         </div>
-                      </label>
+                      </div>
                     );
                   })}
                   {wsTools.filter(t => !agentToolIds.has(getToolId(t))).length === 0 && (
@@ -811,26 +1064,34 @@ export default function AgentDetailPage() {
             <div className="flex justify-between gap-2 p-4 border-t">
               <div>
                 {!showCreateTool && (
-                  <button onClick={() => setShowCreateTool(true)} className="flex items-center gap-1 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg">
+                  <button onClick={() => { resetToolForm(); setShowCreateTool(true); }} className="flex items-center gap-1 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg">
                     <Plus size={14} /> Criar Nova
                   </button>
                 )}
                 {showCreateTool && (
-                  <button onClick={() => setShowCreateTool(false)} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800">
+                  <button onClick={() => { resetToolForm(); setShowCreateTool(false); }} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800">
                     ← Voltar
                   </button>
                 )}
               </div>
               <div className="flex gap-2">
-                <button onClick={() => setShowToolModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
+                <button onClick={() => { resetToolForm(); setShowToolModal(false); }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
                   Cancelar
                 </button>
                 {showCreateTool ? (
-                  <button onClick={createTool} disabled={!newTool.name || !newTool.url || creatingTool}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
-                    {creatingTool && <Loader2 size={14} className="animate-spin" />}
-                    Criar Tool
-                  </button>
+                  editingToolId ? (
+                    <button onClick={saveEditTool} disabled={!newTool.name || !newTool.url || creatingTool}
+                      className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
+                      {creatingTool && <Loader2 size={14} className="animate-spin" />}
+                      Salvar Alteracoes
+                    </button>
+                  ) : (
+                    <button onClick={createTool} disabled={!newTool.name || !newTool.url || creatingTool}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+                      {creatingTool && <Loader2 size={14} className="animate-spin" />}
+                      Criar Tool
+                    </button>
+                  )
                 ) : (
                   <button onClick={addTools} disabled={selectedToolIds.size === 0 || saving}
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
