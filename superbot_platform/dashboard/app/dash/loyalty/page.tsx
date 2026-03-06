@@ -42,7 +42,7 @@ interface Member {
 interface Campaign {
   id: string;
   name: string;
-  type: 'manual' | 'scheduled';
+  campaign_type: 'manual' | 'scheduled';
   status: 'draft' | 'scheduled' | 'sending' | 'sent';
   template_name?: string;
   ai_prompt?: string;
@@ -91,7 +91,7 @@ export default function LoyaltyPage() {
   const [showCampaignForm, setShowCampaignForm] = useState(false);
   const [campaignForm, setCampaignForm] = useState({
     name: '',
-    type: 'manual' as 'manual' | 'scheduled',
+    campaign_type: 'manual' as 'manual' | 'scheduled',
     template_name: '',
     ai_prompt: '',
     scheduled_at: '',
@@ -129,7 +129,7 @@ export default function LoyaltyPage() {
     setError(null);
     try {
       const res = await api.get(`/api/loyalty/clubs/${tId}`);
-      setClubs(Array.isArray(res.data) ? res.data : []);
+      setClubs(res.data?.clubs || []);
     } catch {
       setError('Failed to load clubs');
     } finally {
@@ -216,7 +216,7 @@ export default function LoyaltyPage() {
       const res = await api.get(
         `/api/loyalty/members/${tenantId}/${clubId}?${params.toString()}`
       );
-      setMembers(Array.isArray(res.data) ? res.data : []);
+      setMembers(res.data?.members || []);
     } catch {
       setError('Failed to load members');
     } finally {
@@ -269,7 +269,7 @@ export default function LoyaltyPage() {
     setError(null);
     try {
       const res = await api.get(`/api/loyalty/campaigns/${tenantId}/${clubId}`);
-      setCampaigns(Array.isArray(res.data) ? res.data : []);
+      setCampaigns(res.data?.campaigns || []);
     } catch {
       setError('Failed to load campaigns');
     } finally {
@@ -280,7 +280,7 @@ export default function LoyaltyPage() {
   const openCreateCampaign = () => {
     setCampaignForm({
       name: '',
-      type: 'manual',
+      campaign_type: 'manual',
       template_name: '',
       ai_prompt: '',
       scheduled_at: '',
@@ -295,7 +295,7 @@ export default function LoyaltyPage() {
     try {
       await api.post(`/api/loyalty/campaigns/${tenantId}/${selectedClub.id}`, {
         name: campaignForm.name.trim(),
-        type: campaignForm.type,
+        campaign_type: campaignForm.campaign_type,
         template_name: campaignForm.template_name.trim() || undefined,
         ai_prompt: campaignForm.ai_prompt.trim() || undefined,
         scheduled_at: campaignForm.scheduled_at || undefined,
@@ -794,11 +794,11 @@ export default function LoyaltyPage() {
                         Type
                       </label>
                       <select
-                        value={campaignForm.type}
+                        value={campaignForm.campaign_type}
                         onChange={(e) =>
                           setCampaignForm({
                             ...campaignForm,
-                            type: e.target.value as 'manual' | 'scheduled',
+                            campaign_type: e.target.value as 'manual' | 'scheduled',
                           })
                         }
                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -824,7 +824,7 @@ export default function LoyaltyPage() {
                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
-                    {campaignForm.type === 'scheduled' && (
+                    {campaignForm.campaign_type === 'scheduled' && (
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">
                           Scheduled At
@@ -915,7 +915,7 @@ export default function LoyaltyPage() {
                               {c.status}
                             </span>
                             <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-200">
-                              {c.type}
+                              {c.campaign_type}
                             </span>
                           </div>
 

@@ -215,8 +215,8 @@ export default function FollowupStagesPage() {
 
     setReordering(true);
     try {
-      const order = newStages.map((s) => s.id);
-      await api.post(`/api/followup-stages/${tenantId}/reorder`, { order });
+      const stage_ids = newStages.map((s) => s.id);
+      await api.post(`/api/followup-stages/${tenantId}/reorder`, { stage_ids });
     } catch {
       showMessage('error', 'Erro ao reordenar. Recarregue a pagina.');
       void loadStages(tenantId);
