@@ -68,6 +68,138 @@ class HandoffRequest(BaseModel):
     reason: Optional[str] = None
 
 
+# ==================== Pipelines (multi-kanban) ====================
+
+class CreatePipelineRequest(BaseModel):
+    name: str
+    slug: str
+    pipeline_type: str = "custom"  # sales, post_sale, custom
+    is_default: bool = False
+
+
+class UpdatePipelineRequest(BaseModel):
+    name: Optional[str] = None
+    pipeline_type: Optional[str] = None
+    is_default: Optional[bool] = None
+
+
+@router.get("/pipelines/{tenant_id}")
+async def list_pipelines(
+    tenant_id: str,
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista todos os pipelines do projeto."""
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+
+    result = await db.execute(
+        sa_text("""
+            SELECT p.id, p.project_id, p.name, p.slug, p.pipeline_type, p.is_default, p.created_at,
+                   (SELECT COUNT(*) FROM pipeline_stages ps WHERE ps.pipeline_id = p.id) AS stage_count
+            FROM pipelines p
+            WHERE p.project_id = CAST(:pid AS uuid)
+            ORDER BY p.is_default DESC, p.created_at ASC
+        """),
+        {"pid": project_id}
+    )
+    pipelines = [dict(r) for r in result.mappings().all()]
+    return {"pipelines": pipelines, "project_id": project_id}
+
+
+@router.post("/pipelines/{tenant_id}")
+async def create_pipeline(
+    tenant_id: str,
+    body: CreatePipelineRequest,
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cria um novo pipeline."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Apenas admin")
+
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+
+    result = await db.execute(
+        sa_text("""
+            INSERT INTO pipelines (project_id, name, slug, pipeline_type, is_default)
+            VALUES (CAST(:pid AS uuid), :name, :slug, :ptype, :default)
+            RETURNING id, project_id, name, slug, pipeline_type, is_default, created_at
+        """),
+        {"pid": project_id, "name": body.name, "slug": body.slug, "ptype": body.pipeline_type, "default": body.is_default}
+    )
+    pipeline = dict(result.mappings().first())
+    await db.commit()
+    return {"pipeline": pipeline}
+
+
+@router.patch("/pipelines/{tenant_id}/{pipeline_id}")
+async def update_pipeline(
+    tenant_id: str,
+    pipeline_id: str,
+    body: UpdatePipelineRequest,
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Atualiza pipeline."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Apenas admin")
+
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nenhum campo")
+
+    set_clauses = []
+    params = {"plid": pipeline_id, "pid": project_id}
+    for key, value in updates.items():
+        set_clauses.append(f"{key} = :{key}")
+        params[key] = value
+
+    sql = f"""
+        UPDATE pipelines SET {', '.join(set_clauses)}
+        WHERE id = CAST(:plid AS uuid) AND project_id = CAST(:pid AS uuid)
+        RETURNING id, project_id, name, slug, pipeline_type, is_default, created_at
+    """
+    result = await db.execute(sa_text(sql), params)
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Pipeline nao encontrado")
+    await db.commit()
+    return {"pipeline": dict(row)}
+
+
+@router.delete("/pipelines/{tenant_id}/{pipeline_id}")
+async def delete_pipeline(
+    tenant_id: str,
+    pipeline_id: str,
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove pipeline (CASCADE remove stages e assignments vinculados)."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Apenas admin")
+
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+
+    # Prevent deleting default pipeline
+    chk = await db.execute(
+        sa_text("SELECT is_default FROM pipelines WHERE id = CAST(:plid AS uuid) AND project_id = CAST(:pid AS uuid)"),
+        {"plid": pipeline_id, "pid": project_id}
+    )
+    row = chk.mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Pipeline nao encontrado")
+    if row["is_default"]:
+        raise HTTPException(status_code=400, detail="Nao pode deletar o pipeline padrao")
+
+    await db.execute(
+        sa_text("DELETE FROM pipelines WHERE id = CAST(:plid AS uuid) AND project_id = CAST(:pid AS uuid)"),
+        {"plid": pipeline_id, "pid": project_id}
+    )
+    await db.commit()
+    return {"deleted": True}
+
+
 # ==================== Pipeline Stages ====================
 
 @router.get("/stages/{tenant_id}")

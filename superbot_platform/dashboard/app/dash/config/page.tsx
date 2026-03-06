@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Settings, Activity, BarChart3, Users, MessageSquare, Clock } from 'lucide-react';
+import { Settings, Activity, BarChart3, Users, MessageSquare, Clock, Zap } from 'lucide-react';
 import { clientsAPI } from '@/lib/api';
 import { LOCALE_LABELS, useTranslation, type Locale } from '@/lib/i18n';
 
@@ -76,6 +76,14 @@ export default function ConfigIndexPage() {
       href: '/dash/config/followup',
       bgColor: 'bg-amber-100',
       textColor: 'text-amber-600',
+    },
+    {
+      title: 'Cadencia Follow-up',
+      description: 'Estagios com prompt IA e midia por etapa',
+      icon: Zap,
+      href: '/dash/config/followup-stages',
+      bgColor: 'bg-violet-100',
+      textColor: 'text-violet-600',
     },
   ];
 

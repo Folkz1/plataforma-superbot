@@ -23,6 +23,9 @@ from app.api.routes import (
     agents as agents_routes,
     pipeline as pipeline_routes,
     onboarding as onboarding_routes,
+    media as media_routes,
+    loyalty as loyalty_routes,
+    followup_stages as followup_stages_routes,
 )
 
 
@@ -79,6 +82,9 @@ app.include_router(webhook_routes.router)
 app.include_router(agents_routes.router)
 app.include_router(pipeline_routes.router)
 app.include_router(onboarding_routes.router)
+app.include_router(media_routes.router)
+app.include_router(loyalty_routes.router)
+app.include_router(followup_stages_routes.router)
 
 
 # ==================== Health ====================

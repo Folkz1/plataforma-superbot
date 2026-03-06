@@ -30,13 +30,22 @@ async def init_db():
     Cria APENAS as tabelas do dashboard (clients, dashboard_users, sessions).
     NAO toca nas tabelas reais do multitenant (projects, conversation_*, etc).
     """
-    from app.db.models import Base, Client, DashboardUser, Session as SessionModel, VoiceCallHistory
+    from app.db.models import (
+        Base, Client, DashboardUser, Session as SessionModel, VoiceCallHistory,
+        MediaLibrary, Pipeline, FollowupStage, LoyaltyClub, ClubMember, ClubCampaign,
+    )
 
     dashboard_tables = [
         Client.__table__,
         DashboardUser.__table__,
         SessionModel.__table__,
         VoiceCallHistory.__table__,
+        MediaLibrary.__table__,
+        Pipeline.__table__,
+        FollowupStage.__table__,
+        LoyaltyClub.__table__,
+        ClubMember.__table__,
+        ClubCampaign.__table__,
     ]
 
     async with engine.begin() as conn:
@@ -139,6 +148,28 @@ async def init_db():
                 UPDATE public.conversation_events
                 SET event_created_at = public.superbot_extract_event_created_at(raw_payload, created_at)
                 WHERE event_created_at IS NULL
+            """))
+
+            # Set gen_random_uuid() defaults for new tables
+            for tbl in ['media_library', 'pipelines', 'followup_stages', 'loyalty_clubs', 'club_members', 'club_campaigns']:
+                await conn.execute(sa_text(f"""
+                    ALTER TABLE {tbl} ALTER COLUMN id SET DEFAULT gen_random_uuid()
+                """))
+
+            # Unique constraint for club_members (phone per club)
+            await conn.execute(sa_text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_club_members_club_phone
+                ON club_members (club_id, phone)
+            """))
+
+            # F1: Add pipeline_id to pipeline_stages and conversation_assignments
+            await conn.execute(sa_text("""
+                ALTER TABLE public.pipeline_stages
+                ADD COLUMN IF NOT EXISTS pipeline_id uuid REFERENCES pipelines(id) ON DELETE CASCADE
+            """))
+            await conn.execute(sa_text("""
+                ALTER TABLE public.conversation_assignments
+                ADD COLUMN IF NOT EXISTS pipeline_id uuid REFERENCES pipelines(id) ON DELETE SET NULL
             """))
 
             await conn.execute(sa_text("""

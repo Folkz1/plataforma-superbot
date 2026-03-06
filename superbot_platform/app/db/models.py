@@ -467,6 +467,104 @@ class HandoffHistory(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class MediaLibrary(Base):
+    """Arquivo de midia compartilhado (agentes, follow-up, campanhas)."""
+    __tablename__ = "media_library"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    media_type = Column(Text, nullable=False)  # image, video, audio, document
+    url = Column(Text, nullable=False)
+    filename = Column(Text, nullable=False)
+    description = Column(Text, default="")
+    tags = Column(ARRAY(Text), default=list)
+    size_bytes = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Pipeline(Base):
+    """Pipeline customizavel (kanban) por projeto."""
+    __tablename__ = "pipelines"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    slug = Column(Text, nullable=False)
+    pipeline_type = Column(Text, default="sales")  # sales, post_sale, custom
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class FollowupStage(Base):
+    """Estagio de follow-up com prompt IA e midia configuravel."""
+    __tablename__ = "followup_stages"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    name = Column(Text, nullable=False)
+    delay_hours = Column(Integer, nullable=False, default=24)
+    delay_minutes = Column(Integer, nullable=False, default=0)
+    ai_prompt = Column(Text, default="")
+    template_name = Column(Text, default="")
+    language_code = Column(Text, default="pt_BR")
+    media_ids = Column(ARRAY(Text), default=list)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class LoyaltyClub(Base):
+    """Clube de fidelidade por projeto."""
+    __tablename__ = "loyalty_clubs"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    project_id = Column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    description = Column(Text, default="")
+    active = Column(Boolean, default=True)
+    welcome_message = Column(Text, default="")
+    settings = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClubMember(Base):
+    """Membro de um clube de fidelidade."""
+    __tablename__ = "club_members"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    club_id = Column(Uuid(as_uuid=True), ForeignKey("loyalty_clubs.id", ondelete="CASCADE"), nullable=False)
+    phone = Column(Text, nullable=False)
+    name = Column(Text, default="")
+    email = Column(Text, default="")
+    source = Column(Text, default="manual")  # manual, agent, import
+    metadata_json = Column("metadata", JSON, default=dict)
+    joined_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClubCampaign(Base):
+    """Campanha/newsletter de um clube."""
+    __tablename__ = "club_campaigns"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    club_id = Column(Uuid(as_uuid=True), ForeignKey("loyalty_clubs.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=False)
+    campaign_type = Column(Text, default="manual")  # manual, scheduled
+    template_name = Column(Text, default="")
+    ai_prompt = Column(Text, default="")
+    media_ids = Column(ARRAY(Text), default=list)
+    scheduled_at = Column(DateTime(timezone=True))
+    sent_at = Column(DateTime(timezone=True))
+    recipients_count = Column(Integer, default=0)
+    status = Column(Text, default="draft")  # draft, scheduled, sending, sent
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class VoiceCallHistory(Base):
     """Historico de ligacoes ElevenLabs."""
     __tablename__ = "voice_call_history"

@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   BarChart3, MessageCircle, Users, Bot, Phone, BookOpen, Settings, GitBranch,
-  LogOut, Menu, ArrowLeftRight, X, Globe, Moon, Sun, FlaskConical, Code
+  LogOut, Menu, ArrowLeftRight, X, Globe, Moon, Sun, FlaskConical, Code,
+  Image, Crown
 } from 'lucide-react';
 import { useTranslation, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 import { useTheme } from '@/hooks/useTheme';
@@ -35,6 +36,8 @@ export default function Sidebar() {
     { label: 'Widget', href: '/dash/agents-config/widget', icon: <Code className="w-5 h-5" />, adminOnly: true },
     { label: t.nav_rag, href: '/dash/rag', icon: <BookOpen className="w-5 h-5" />, adminOnly: true },
     { label: 'Chat Lab', href: '/dash/chat-lab', icon: <FlaskConical className="w-5 h-5" />, adminOnly: true },
+    { label: 'Midias', href: '/dash/media', icon: <Image className="w-5 h-5" />, adminOnly: true },
+    { label: 'Clube', href: '/dash/loyalty', icon: <Crown className="w-5 h-5" />, adminOnly: true },
     { label: 'Usuarios', href: '/dash/users', icon: <Users className="w-5 h-5" />, managerUp: true },
     { label: t.nav_config, href: '/dash/config', icon: <Settings className="w-5 h-5" />, adminOnly: true },
   ];
