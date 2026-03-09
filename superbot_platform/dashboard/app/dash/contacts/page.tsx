@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useTranslation } from '@/lib/i18n';
 import { getPlatformLogo } from '@/components/PlatformLogos';
-import { Download, RefreshCcw, Search, Users } from 'lucide-react';
+import { Download, ExternalLink, RefreshCcw, Search, Users } from 'lucide-react';
 
 interface ContactItem {
   project_id: string;
@@ -328,12 +328,31 @@ export default function ContactsPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {contacts.map((c) => (
-                  <tr key={`${c.channel_type}:${c.conversation_id}`} className="hover:bg-gray-50">
-                    <td className="px-5 py-3 text-sm text-gray-900 font-medium whitespace-nowrap">
-                      {c.contact_name}
+                  <tr
+                    key={`${c.channel_type}:${c.conversation_id}`}
+                    className="hover:bg-blue-50 cursor-pointer transition-colors"
+                    onClick={() => router.push(`/dash/conversations/${c.project_id}/${c.conversation_id}?channel_type=${encodeURIComponent(c.channel_type)}`)}
+                  >
+                    <td className="px-5 py-3 text-sm font-medium whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-900">{c.contact_name}</span>
+                        <ExternalLink className="w-3 h-3 text-gray-400" />
+                      </div>
                     </td>
                     <td className="px-5 py-3 text-sm text-gray-700 whitespace-nowrap">
-                      {c.conversation_id}
+                      {c.channel_type === 'whatsapp' ? (
+                        <a
+                          href={`https://wa.me/${c.conversation_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-green-700 hover:text-green-900 hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          +{c.conversation_id.replace(/(\d{2})(\d{2})(\d{5})(\d{4})/, '$1 $2 $3-$4')}
+                        </a>
+                      ) : (
+                        c.conversation_id
+                      )}
                     </td>
                     <td className="px-5 py-3 text-sm text-gray-700 whitespace-nowrap">
                       <div className="flex items-center gap-2">

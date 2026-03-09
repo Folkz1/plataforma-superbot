@@ -6,7 +6,7 @@ import { useConversation } from '@/hooks/useConversation';
 import {
   ArrowLeft, MessageCircle, User, Bot, Wrench,
   RefreshCw, Send, HandMetal, RotateCcw, Share2, Copy, Check, X,
-  AlertTriangle, Clock, PhoneForwarded
+  AlertTriangle, Clock, Phone, PhoneForwarded
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getPlatformLogo } from '@/components/PlatformLogos';
@@ -250,9 +250,21 @@ export default function ConversationViewerPage() {
                 <h1 className="text-lg font-semibold text-gray-900">
                   {displayName}
                 </h1>
-                <p className="text-sm text-gray-600">
-                  {conversation.channel_type} • {messages.length} mensagens
-                </p>
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <span>{conversation.channel_type} • {messages.length} mensagens</span>
+                  {conversation.channel_type === 'whatsapp' && conversation.conversation_id && (
+                    <a
+                      href={`https://wa.me/${conversation.conversation_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full text-xs font-medium hover:bg-green-100 transition"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Phone className="w-3 h-3" />
+                      +{conversation.conversation_id.replace(/(\d{2})(\d{2})(\d{5})(\d{4})/, '$1 $2 $3-$4')}
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
 
