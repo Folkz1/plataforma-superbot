@@ -13,15 +13,30 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, or_, select
+from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes.auth import get_current_user
 from app.core.tenancy import resolve_project_id_for_user
 from app.db.database import get_db
-from app.db.models import Contact, ConversationState, DashboardUser
+from app.db.models import Contact, ConversationEvent, ConversationState, DashboardUser
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
+
+
+def _extract_contact_name_from_raw(raw_payload: dict | None) -> str | None:
+    """Extract contact name from WhatsApp raw_payload (profile.name)."""
+    if not raw_payload:
+        return None
+    try:
+        changes = raw_payload.get("entry", [{}])[0].get("changes", [])
+        if changes:
+            contacts = changes[0].get("value", {}).get("contacts", [])
+            if contacts:
+                return contacts[0].get("profile", {}).get("name")
+    except (IndexError, KeyError, TypeError):
+        pass
+    return None
 
 
 def format_contact_display(conversation_id: str, channel_type: str, contact_name: str | None) -> str:
@@ -113,13 +128,32 @@ async def list_contacts(
     result = await db.execute(query)
     rows = result.all()
 
+    # Batch-resolve missing names from WhatsApp raw_payload (same as conversations endpoint)
+    missing_ids = [state.conversation_id for state, raw_name in rows if not raw_name and state.channel_type == "whatsapp"]
+    wa_names: dict[str, str] = {}
+    if missing_ids:
+        for cid in missing_ids:
+            evt_result = await db.execute(
+                select(ConversationEvent.raw_payload).where(
+                    and_(
+                        ConversationEvent.conversation_id == cid,
+                        ConversationEvent.direction == "in",
+                    )
+                ).limit(1)
+            )
+            raw = evt_result.scalar_one_or_none()
+            wa_name = _extract_contact_name_from_raw(raw)
+            if wa_name:
+                wa_names[cid] = wa_name
+
     items: list[dict] = []
     for state, raw_name in rows:
+        resolved_name = raw_name or wa_names.get(state.conversation_id)
         items.append(
             {
                 "project_id": str(state.project_id),
                 "conversation_id": state.conversation_id,
-                "contact_name": format_contact_display(state.conversation_id, state.channel_type, raw_name),
+                "contact_name": format_contact_display(state.conversation_id, state.channel_type, resolved_name),
                 "channel_type": state.channel_type,
                 "status": state.status,
                 "last_event_at": state.last_event_at,
