@@ -701,7 +701,7 @@ class ChannelRouter:
         ai_state: str = None
     ):
         """Atualiza ou cria conversation_state."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         summary = ai_response[:200] if ai_response else None
 
         await self.db.execute(
@@ -712,12 +712,12 @@ class ChannelRouter:
                      last_message_type, last_text, summary_short, updated_at)
                 VALUES
                     (CAST(:pid AS uuid), :ct, :cid, :ci,
-                     'open', CAST(:now AS timestamptz), CAST(:now AS timestamptz), 'out',
-                     'ai_reply', :txt, :summary, CAST(:now AS timestamptz))
+                     'open', :now, :now, 'out',
+                     'ai_reply', :txt, :summary, :now)
                 ON CONFLICT (project_id, channel_type, conversation_id)
                 DO UPDATE SET
-                    last_event_at = CAST(:now AS timestamptz),
-                    last_out_at = CAST(:now AS timestamptz),
+                    last_event_at = :now,
+                    last_out_at = :now,
                     last_direction = 'out',
                     last_message_type = 'ai_reply',
                     last_text = :txt,
@@ -726,7 +726,7 @@ class ChannelRouter:
                         WHEN conversation_states.status = 'closed' THEN 'open'
                         ELSE conversation_states.status
                     END,
-                    updated_at = CAST(:now AS timestamptz)
+                    updated_at = :now
             """),
             {
                 "pid": str(project_id),
