@@ -297,20 +297,24 @@ class ChannelRouter:
             if not row:
                 return None
 
-            # Get API key from clients table via project
-            key_result = await self.db.execute(
-                sa_text("""
-                    SELECT c.elevenlabs_api_key
-                    FROM clients c
-                    JOIN projects p ON p.client_id = c.id
-                    WHERE p.id = CAST(:pid AS uuid)
-                    LIMIT 1
-                """),
-                {"pid": str(project_id)}
-            )
-            key_row = key_result.mappings().first()
+            # Get API key from project_secrets or clients table
             import os
-            api_key = (key_row["elevenlabs_api_key"] if key_row else None) or os.getenv("ELEVENLABS_API_KEY", "")
+            api_key = None
+            try:
+                key_result = await self.db.execute(
+                    sa_text("""
+                        SELECT ps.elevenlabs_api_key
+                        FROM project_secrets ps
+                        WHERE ps.project_id = CAST(:pid AS uuid)
+                        LIMIT 1
+                    """),
+                    {"pid": str(project_id)}
+                )
+                key_row = key_result.mappings().first()
+                api_key = key_row["elevenlabs_api_key"] if key_row else None
+            except Exception:
+                await self.db.rollback()
+            api_key = api_key or os.getenv("ELEVENLABS_API_KEY", "")
 
             return {
                 "agent_id": row["agent_id"],
