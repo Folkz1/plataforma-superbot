@@ -151,6 +151,8 @@ class ChannelRouter:
         try:
             el_agent = await self._get_elevenlabs_text_agent(project_id)
             if el_agent:
+                # Extract customer name from metadata (push_name from WhatsApp)
+                customer_name = (metadata or {}).get("push_name", "")
                 el_response = await self._process_with_elevenlabs_chat(
                     project_id=project_id,
                     agent=agent,
@@ -160,6 +162,7 @@ class ChannelRouter:
                     sender_id=sender_id,
                     message_text=message_text,
                     state=state,
+                    customer_name=customer_name,
                 )
                 if el_response and el_response.get("success"):
                     return el_response
@@ -335,6 +338,7 @@ class ChannelRouter:
         sender_id: str,
         message_text: str,
         state: Optional[dict],
+        customer_name: str = "",
     ) -> dict:
         """
         Process message using ElevenLabs Chat Mode (text-only WebSocket).
@@ -366,13 +370,17 @@ class ChannelRouter:
                     meta = {}
             el_conv_id = meta.get("elevenlabs_conversation_id")
 
-        # Send message via ElevenLabs Chat Mode
+        # Send message via ElevenLabs Chat Mode with dynamic variables
+        dv = {}
+        if customer_name:
+            dv["customer_name"] = customer_name
         chat_client = ElevenLabsChatClient(api_key=el_agent["api_key"])
         result = await chat_client.send_message(
             agent_id=el_agent["agent_id"],
             message=message_text,
             conversation_history=history_str,
             conversation_id=el_conv_id,
+            dynamic_variables=dv,
         )
 
         if not result.get("success") or not result.get("text"):
@@ -997,11 +1005,16 @@ class MetaWebhookHandler:
                         if value.get("statuses"):
                             continue
 
+                        # Extract push_name from contacts
+                        contacts = value.get("contacts", [])
+                        push_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
+
                         for message in value.get("messages", []):
                             result = await self._handle_whatsapp_message(
                                 message=message,
                                 metadata=value.get("metadata", {}),
-                                router=router
+                                router=router,
+                                push_name=push_name,
                             )
                             if result:
                                 responses.append(result)
@@ -1026,7 +1039,7 @@ class MetaWebhookHandler:
         return responses
 
     async def _handle_whatsapp_message(
-        self, message: dict, metadata: dict, router: ChannelRouter
+        self, message: dict, metadata: dict, router: ChannelRouter, push_name: str = ""
     ) -> Optional[dict]:
         """Processa mensagem do WhatsApp."""
         msg_type = message.get("type")
@@ -1068,7 +1081,7 @@ class MetaWebhookHandler:
             message_text=text,
             channel_identifier=phone_number_id,
             audio_url=audio_url,
-            metadata={"phone_number_id": phone_number_id, "raw": message}
+            metadata={"phone_number_id": phone_number_id, "push_name": push_name, "raw": message}
         )
 
         if result.get("skipped") or result.get("error"):

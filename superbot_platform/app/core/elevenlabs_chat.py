@@ -14,7 +14,7 @@ import httpx
 logger = logging.getLogger("superbot.elevenlabs_chat")
 
 ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1"
-WS_TIMEOUT = 15  # seconds - Meta webhook limit is 20s
+WS_TIMEOUT = 20  # seconds - Meta webhook limit is ~20s
 
 
 class ElevenLabsChatClient:
@@ -24,10 +24,11 @@ class ElevenLabsChatClient:
     Flow:
     1. GET signed_url from /convai/conversation/get-signed-url
     2. Connect WS with ?input_mode=text&output_mode=text_only
-    3. Send conversation_initiation_client_data (dynamic_variables with history)
-    4. Send user_message
-    5. Collect agent_response events, handle ping/pong
-    6. Return full text response
+    3. Wait for server handshake (conversation_initiation_metadata + ping)
+    4. Reply pong, then send conversation_initiation_client_data
+    5. Send user_message
+    6. Collect agent_response events (text chunks), handle pings
+    7. Return full text response
     """
 
     def __init__(self, api_key: str):
@@ -76,68 +77,79 @@ class ElevenLabsChatClient:
         try:
             response_text = ""
             new_conversation_id = conversation_id
+            init_sent = False
 
-            async with asyncio.timeout(WS_TIMEOUT):
-                async with websockets.connect(ws_url) as ws:
-                    # Send init data
-                    init_data = {
-                        "type": "conversation_initiation_client_data",
-                        "dynamic_variables": dv,
-                    }
-                    if conversation_id:
-                        init_data["conversation_id"] = conversation_id
-                    await ws.send(json.dumps(init_data))
+            async with websockets.connect(ws_url) as ws:
+                # Phase 1: Wait for server handshake, then send our init + message
+                for _ in range(100):  # max iterations safety
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        break
 
-                    # Send user message
-                    await ws.send(json.dumps({
-                        "type": "user_message",
-                        "text": message,
-                    }))
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
 
-                    # Collect response
-                    async for raw in ws:
-                        try:
-                            event = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
+                    evt_type = event.get("type", "")
 
-                        evt_type = event.get("type", "")
+                    # Handle ping -> pong
+                    if evt_type == "ping":
+                        pong = {"type": "pong"}
+                        ping_evt = event.get("ping_event", {})
+                        if ping_evt.get("event_id"):
+                            pong["event_id"] = ping_evt["event_id"]
+                        await ws.send(json.dumps(pong))
 
-                        # Handle ping -> pong (required, else timeout)
-                        if evt_type == "ping":
-                            pong = {"type": "pong"}
-                            if event.get("event_id"):
-                                pong["event_id"] = event["event_id"]
-                            await ws.send(json.dumps(pong))
-                            continue
-
-                        # Capture conversation_id from init response
-                        if evt_type == "conversation_initiation_metadata":
-                            new_conversation_id = event.get("conversation_id", new_conversation_id)
-                            continue
-
-                        # Streaming text chunks
-                        if evt_type == "agent_chat_response_part":
-                            chunk = event.get("text", "")
-                            response_text += chunk
-                            continue
-
-                        # Final response - done
-                        if evt_type == "agent_response":
-                            # agent_response may contain full text or just signal end
-                            full = event.get("text")
-                            if full:
-                                response_text = full
-                            break
-
-                        # Error
-                        if evt_type == "error":
-                            logger.error(f"[ELEVENLABS_CHAT] WS error: {event}")
-                            return {
-                                "text": None,
-                                "success": False,
-                                "error": event.get("message", "WS error"),
+                        # After first pong, send init data + user message
+                        if not init_sent:
+                            init_data = {
+                                "type": "conversation_initiation_client_data",
+                                "dynamic_variables": dv,
                             }
+                            if conversation_id:
+                                init_data["conversation_id"] = conversation_id
+                            await ws.send(json.dumps(init_data))
+
+                            await ws.send(json.dumps({
+                                "type": "user_message",
+                                "text": message,
+                            }))
+                            init_sent = True
+                        continue
+
+                    # Capture conversation_id from init response
+                    if evt_type == "conversation_initiation_metadata":
+                        meta = event.get("conversation_initiation_metadata_event", {})
+                        new_conversation_id = meta.get("conversation_id", new_conversation_id)
+                        continue
+
+                    # Streaming text chunks
+                    if evt_type == "agent_chat_response_part":
+                        chunk = event.get("text", "")
+                        response_text += chunk
+                        continue
+
+                    # Final response - done
+                    if evt_type == "agent_response":
+                        full = event.get("agent_response_event", {}).get("agent_response", "")
+                        if full:
+                            response_text = full
+                        break
+
+                    # Audio events - ignore in text mode (server may still send them)
+                    if evt_type == "audio":
+                        continue
+
+                    # Error
+                    if evt_type == "error":
+                        logger.error(f"[ELEVENLABS_CHAT] WS error: {event}")
+                        return {
+                            "text": None,
+                            "success": False,
+                            "error": event.get("message", "WS error"),
+                        }
 
             return {
                 "text": response_text.strip() if response_text else None,
