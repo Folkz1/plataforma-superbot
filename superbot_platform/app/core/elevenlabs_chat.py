@@ -94,15 +94,20 @@ class ElevenLabsChatClient:
 
                     evt_type = event.get("type", "")
 
-                    # Handle ping -> pong
+                    # Handle ping -> pong (keep-alive)
                     if evt_type == "ping":
                         pong = {"type": "pong"}
                         ping_evt = event.get("ping_event", {})
                         if ping_evt.get("event_id"):
                             pong["event_id"] = ping_evt["event_id"]
                         await ws.send(json.dumps(pong))
+                        continue
 
-                        # After first pong, send init data + user message
+                    # Server handshake - send init + message immediately after
+                    if evt_type == "conversation_initiation_metadata":
+                        meta = event.get("conversation_initiation_metadata_event", {})
+                        new_conversation_id = meta.get("conversation_id", new_conversation_id)
+
                         if not init_sent:
                             init_data = {
                                 "type": "conversation_initiation_client_data",
@@ -117,12 +122,6 @@ class ElevenLabsChatClient:
                                 "text": message,
                             }))
                             init_sent = True
-                        continue
-
-                    # Capture conversation_id from init response
-                    if evt_type == "conversation_initiation_metadata":
-                        meta = event.get("conversation_initiation_metadata_event", {})
-                        new_conversation_id = meta.get("conversation_id", new_conversation_id)
                         continue
 
                     # Streaming text chunks
