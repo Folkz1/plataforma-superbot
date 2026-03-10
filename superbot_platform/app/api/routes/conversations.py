@@ -752,6 +752,100 @@ async def update_conversation_status(
     }
 
 
+class BotPauseRequest(BaseModel):
+    pause_hours: Optional[int] = None  # None = resume, 3 = 3h, 360 = 15 days
+
+
+@router.post("/{project_id}/{conversation_id}/bot-pause")
+async def toggle_bot_pause(
+    project_id: str,
+    conversation_id: str,
+    body: BotPauseRequest = BotPauseRequest(),
+    channel_type: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: DashboardUser = Depends(get_current_user)
+):
+    """
+    Pause or resume bot for a conversation.
+    - pause_hours=None and bot is paused -> resume
+    - pause_hours=3 -> pause for 3 hours
+    - pause_hours=360 -> pause for 15 days (max)
+    """
+    project_uuid, state = await _get_conversation_state(
+        project_id, conversation_id, current_user, db, channel_type
+    )
+
+    now = datetime.now(timezone.utc)
+    meta = dict(state.metadata_json or {})
+    was_paused = meta.get("bot_paused", False)
+
+    if body.pause_hours is None and was_paused:
+        # Resume bot
+        meta.pop("bot_paused", None)
+        meta.pop("bot_paused_by", None)
+        meta.pop("bot_paused_at", None)
+        meta.pop("bot_paused_until", None)
+        meta.pop("human_takeover_until", None)
+        meta.pop("human_agent_name", None)
+        new_status = "open"
+        action = "retomado"
+    elif body.pause_hours is not None:
+        # Pause bot for N hours (max 360h = 15 days)
+        hours = min(body.pause_hours, 360)
+        until = now + timedelta(hours=hours)
+        meta["bot_paused"] = True
+        meta["bot_paused_by"] = current_user.name or current_user.email
+        meta["bot_paused_at"] = now.isoformat()
+        meta["bot_paused_until"] = until.isoformat()
+        meta["human_agent_name"] = current_user.name or current_user.email
+        new_status = "handoff"
+        if hours >= 360:
+            action = "pausado por 15 dias"
+        elif hours >= 24:
+            action = f"pausado por {hours // 24} dias"
+        else:
+            action = f"pausado por {hours}h"
+    else:
+        return {"ok": True, "bot_paused": False, "status": state.status}
+
+    await db.execute(
+        sa_update(ConversationState).where(
+            and_(
+                ConversationState.project_id == project_uuid,
+                ConversationState.channel_type == state.channel_type,
+                ConversationState.conversation_id == conversation_id
+            )
+        ).values(
+            status=new_status,
+            metadata_json=meta,
+            updated_at=now
+        )
+    )
+
+    # Log system event
+    event = ConversationEvent(
+        id=uuid_mod.uuid4(),
+        project_id=project_uuid,
+        channel_type=state.channel_type,
+        channel_identifier=state.channel_identifier,
+        conversation_id=conversation_id,
+        direction="system",
+        message_type="status_change",
+        text=f"Bot {action} por {current_user.name or current_user.email}",
+    )
+    db.add(event)
+    await db.commit()
+
+    return {
+        "ok": True,
+        "bot_paused": body.pause_hours is not None,
+        "pause_hours": body.pause_hours,
+        "paused_until": meta.get("bot_paused_until"),
+        "status": new_status,
+        "paused_by": meta.get("bot_paused_by"),
+    }
+
+
 @router.post("/{project_id}/{conversation_id}/send")
 async def send_human_message(
     project_id: str,

@@ -134,6 +134,20 @@ export function useConversation(
     }
   }, [projectId, conversationId, channelType]);
 
+  const botPause = useCallback(async (pauseHours: number | null) => {
+    try {
+      const resp = await api.post(
+        `/api/conversations/${projectId}/${conversationId}/bot-pause`,
+        { pause_hours: pauseHours },
+        { params: requestParams }
+      );
+      await fetchConversation();
+      return resp.data;
+    } catch (err: any) {
+      throw new Error(err.response?.data?.detail || 'Erro ao alternar pausa do bot');
+    }
+  }, [projectId, conversationId, channelType]);
+
   return {
     conversation,
     messages,
@@ -143,6 +157,7 @@ export function useConversation(
     sending,
     refresh,
     sendMessage,
-    updateStatus
+    updateStatus,
+    botPause
   };
 }

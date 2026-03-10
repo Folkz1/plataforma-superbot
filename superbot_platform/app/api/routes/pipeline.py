@@ -731,6 +731,181 @@ async def get_pool(
     return {"pool": pool, "count": len(pool)}
 
 
+@router.post("/auto-assign/{tenant_id}")
+async def auto_assign_from_pool(
+    tenant_id: str,
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Round-robin: pega o próximo lead do pool e atribui ao atendente
+    com menos conversas ativas que ainda tem capacidade.
+    """
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+
+    # Find current user's team member record
+    member_result = await db.execute(
+        sa_text("""
+            SELECT s.id, s.max_concurrent_conversations, s.is_available,
+                   (SELECT COUNT(*) FROM conversation_assignments ca
+                    WHERE ca.assigned_to = s.id AND ca.status = 'active') AS active_count
+            FROM sales_team_members s
+            WHERE s.project_id = CAST(:pid AS uuid)
+              AND s.user_id = CAST(:uid AS uuid)
+              AND s.is_available = true
+        """),
+        {"pid": project_id, "uid": str(current_user.id)}
+    )
+    member = member_result.mappings().first()
+    if not member:
+        raise HTTPException(status_code=403, detail="Você não é membro da equipe ou está indisponível")
+
+    if member["active_count"] >= member["max_concurrent_conversations"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Capacidade máxima atingida ({member['active_count']}/{member['max_concurrent_conversations']})"
+        )
+
+    # Get oldest unassigned conversation from pool
+    pool_result = await db.execute(
+        sa_text("""
+            SELECT cs.conversation_id, cs.channel_type
+            FROM conversation_states cs
+            WHERE cs.project_id = CAST(:pid AS uuid)
+              AND cs.status IN ('open', 'waiting_customer')
+              AND NOT EXISTS (
+                  SELECT 1 FROM conversation_assignments ca
+                  WHERE ca.project_id = cs.project_id
+                    AND ca.conversation_id = cs.conversation_id
+                    AND ca.channel_type = cs.channel_type
+                    AND ca.status = 'active'
+              )
+            ORDER BY cs.last_event_at ASC
+            LIMIT 1
+        """),
+        {"pid": project_id}
+    )
+    lead = pool_result.mappings().first()
+    if not lead:
+        return {"assigned": False, "reason": "Pool vazio — nenhum lead disponível"}
+
+    # Get first pipeline stage
+    stage_result = await db.execute(
+        sa_text("""
+            SELECT id FROM pipeline_stages
+            WHERE project_id = CAST(:pid AS uuid)
+            ORDER BY position ASC LIMIT 1
+        """),
+        {"pid": project_id}
+    )
+    first_stage = stage_result.scalar_one_or_none()
+
+    # Create assignment
+    result = await db.execute(
+        sa_text("""
+            INSERT INTO conversation_assignments
+                (project_id, conversation_id, channel_type,
+                 assigned_to, assigned_by, pipeline_stage_id, notes)
+            VALUES
+                (CAST(:pid AS uuid), :cid, :ct,
+                 CAST(:ato AS uuid), CAST(:aby AS uuid),
+                 CAST(:sid AS uuid), :notes)
+            RETURNING id, conversation_id, channel_type, assigned_at
+        """),
+        {
+            "pid": project_id,
+            "cid": lead["conversation_id"],
+            "ct": lead["channel_type"],
+            "ato": str(member["id"]),
+            "aby": str(current_user.id),
+            "sid": str(first_stage) if first_stage else None,
+            "notes": "Auto-assigned from pool"
+        }
+    )
+    assignment = dict(result.mappings().first())
+
+    # Log handoff
+    await db.execute(
+        sa_text("""
+            INSERT INTO handoff_history
+                (project_id, conversation_id, channel_type, from_type, to_type, to_id, reason)
+            VALUES
+                (CAST(:pid AS uuid), :cid, :ct, 'pool', 'vendedor', CAST(:to_id AS uuid), 'Auto-assign round-robin')
+        """),
+        {
+            "pid": project_id,
+            "cid": lead["conversation_id"],
+            "ct": lead["channel_type"],
+            "to_id": str(member["id"])
+        }
+    )
+
+    await db.commit()
+    return {"assigned": True, "assignment": assignment}
+
+
+@router.get("/my-leads/{tenant_id}")
+async def get_my_leads(
+    tenant_id: str,
+    status: str = Query("active", description="active, completed, all"),
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Lista os leads atribuídos ao atendente logado.
+    """
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+
+    # Find team member
+    member_result = await db.execute(
+        sa_text("""
+            SELECT id FROM sales_team_members
+            WHERE project_id = CAST(:pid AS uuid) AND user_id = CAST(:uid AS uuid)
+        """),
+        {"pid": project_id, "uid": str(current_user.id)}
+    )
+    member_id = member_result.scalar_one_or_none()
+    if not member_id:
+        raise HTTPException(status_code=403, detail="Você não é membro da equipe")
+
+    status_filter = ""
+    if status != "all":
+        status_filter = "AND ca.status = :status"
+
+    params: dict = {"pid": project_id, "mid": str(member_id)}
+    if status != "all":
+        params["status"] = status
+
+    result = await db.execute(
+        sa_text(f"""
+            SELECT ca.id AS assignment_id, ca.conversation_id, ca.channel_type,
+                   ca.status AS assignment_status, ca.assigned_at, ca.notes,
+                   cs.last_text, cs.last_event_at, cs.status AS conv_status,
+                   cs.summary_short, cs.ai_state,
+                   ps.name AS stage_name, ps.color AS stage_color, ps.position AS stage_position
+            FROM conversation_assignments ca
+            LEFT JOIN conversation_states cs ON (
+                cs.project_id = ca.project_id
+                AND cs.conversation_id = ca.conversation_id
+                AND cs.channel_type = ca.channel_type
+            )
+            LEFT JOIN pipeline_stages ps ON ps.id = ca.pipeline_stage_id
+            WHERE ca.project_id = CAST(:pid AS uuid)
+              AND ca.assigned_to = CAST(:mid AS uuid)
+              {status_filter}
+            ORDER BY cs.last_event_at DESC NULLS LAST
+        """),
+        params
+    )
+    leads = [dict(r) for r in result.mappings().all()]
+
+    return {
+        "leads": leads,
+        "count": len(leads),
+        "member_id": str(member_id),
+    }
+
+
 # ==================== Handoffs ====================
 
 @router.post("/handoff/{tenant_id}")

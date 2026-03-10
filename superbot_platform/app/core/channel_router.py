@@ -96,41 +96,78 @@ class ChannelRouter:
             raw_payload=metadata
         )
 
-        # 3. Verifica se conversa está em handoff (atendimento humano)
+        # 3. Verifica se conversa está pausada ou em handoff
         state = await self._get_conversation_state(project_id, channel, sender_id)
-        if state and state.get("status") == "handoff":
-            human_until = (state.get("metadata") or {}).get("human_takeover_until")
-            if human_until:
-                try:
-                    until_dt = datetime.fromisoformat(human_until)
-                    if datetime.now(timezone.utc) < until_dt:
-                        logger.info(f"Conversation {sender_id} in handoff mode, skipping AI")
-                        return {
-                            "text": None,
-                            "skipped": True,
-                            "reason": "handoff_active",
-                            "project_id": str(project_id)
-                        }
-                except (ValueError, TypeError):
-                    pass
+        if state:
+            meta = state.get("metadata") or {}
+
+            # 3a. Pausa do bot (com ou sem timeout)
+            if meta.get("bot_paused"):
+                paused_until = meta.get("bot_paused_until")
+                if paused_until:
+                    try:
+                        until_dt = datetime.fromisoformat(paused_until)
+                        if datetime.now(timezone.utc) >= until_dt:
+                            # Pausa expirou — bot retoma automaticamente
+                            logger.info(f"Conversation {sender_id} pause expired, resuming AI")
+                        else:
+                            logger.info(f"Conversation {sender_id} bot paused until {paused_until}, skipping AI")
+                            return {
+                                "text": None,
+                                "skipped": True,
+                                "reason": "bot_paused",
+                                "project_id": str(project_id)
+                            }
+                    except (ValueError, TypeError):
+                        pass
+                else:
+                    # Pausa sem timeout (legado) — bloqueia indefinidamente
+                    logger.info(f"Conversation {sender_id} bot permanently paused, skipping AI")
+                    return {
+                        "text": None,
+                        "skipped": True,
+                        "reason": "bot_paused",
+                        "project_id": str(project_id)
+                    }
+
+            # 3b. Handoff temporário (com timeout)
+            if state.get("status") == "handoff":
+                human_until = meta.get("human_takeover_until")
+                if human_until:
+                    try:
+                        until_dt = datetime.fromisoformat(human_until)
+                        if datetime.now(timezone.utc) < until_dt:
+                            logger.info(f"Conversation {sender_id} in handoff mode, skipping AI")
+                            return {
+                                "text": None,
+                                "skipped": True,
+                                "reason": "handoff_active",
+                                "project_id": str(project_id)
+                            }
+                    except (ValueError, TypeError):
+                        pass
 
         # 4. Try ElevenLabs Chat Mode (text agent) before Gemini
-        el_agent = await self._get_elevenlabs_text_agent(project_id)
-        if el_agent:
-            el_response = await self._process_with_elevenlabs_chat(
-                project_id=project_id,
-                agent=agent,
-                el_agent=el_agent,
-                channel=channel,
-                channel_identifier=channel_identifier,
-                sender_id=sender_id,
-                message_text=message_text,
-                state=state,
-            )
-            if el_response and el_response.get("success"):
-                return el_response
-            # If ElevenLabs failed, fall through to Gemini
-            logger.warning(f"[ELEVENLABS_CHAT] Fallback to Gemini: {el_response.get('error', 'unknown')}")
+        try:
+            el_agent = await self._get_elevenlabs_text_agent(project_id)
+            if el_agent:
+                el_response = await self._process_with_elevenlabs_chat(
+                    project_id=project_id,
+                    agent=agent,
+                    el_agent=el_agent,
+                    channel=channel,
+                    channel_identifier=channel_identifier,
+                    sender_id=sender_id,
+                    message_text=message_text,
+                    state=state,
+                )
+                if el_response and el_response.get("success"):
+                    return el_response
+                # If ElevenLabs failed, fall through to Gemini
+                logger.warning(f"[ELEVENLABS_CHAT] Fallback to Gemini: {el_response.get('error', 'unknown')}")
+        except Exception as e:
+            logger.error(f"[ELEVENLABS_CHAT] Exception, falling back to Gemini: {e}")
+            await self.db.rollback()
 
         # 5. Busca contexto RAG (project_knowledge_base)
         rag_context = await self._query_rag(project_id, message_text)
@@ -281,6 +318,7 @@ class ChannelRouter:
             }
         except Exception as e:
             logger.debug(f"[ELEVENLABS_CHAT] _get_elevenlabs_text_agent error: {e}")
+            await self.db.rollback()
             return None
 
     async def _process_with_elevenlabs_chat(
@@ -359,6 +397,7 @@ class ChannelRouter:
                 )
             except Exception as e:
                 logger.debug(f"[ELEVENLABS_CHAT] Failed to persist conv_id: {e}")
+                await self.db.rollback()
 
         # Save AI response to conversation_events
         await self._save_message(
@@ -535,7 +574,8 @@ class ChannelRouter:
             if agent_row and agent_row["system_prompt"]:
                 return agent_row["system_prompt"]
         except Exception:
-            # agents table may not exist yet
+            # agents table may not exist yet — rollback to clear failed transaction
+            await self.db.rollback()
             pass
 
         # 2. Try project_knowledge_base

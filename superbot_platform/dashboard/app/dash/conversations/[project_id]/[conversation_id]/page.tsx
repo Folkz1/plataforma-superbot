@@ -6,7 +6,7 @@ import { useConversation } from '@/hooks/useConversation';
 import {
   ArrowLeft, MessageCircle, User, Bot, Wrench,
   RefreshCw, Send, HandMetal, RotateCcw, Share2, Copy, Check, X,
-  AlertTriangle, Clock, Phone, PhoneForwarded
+  AlertTriangle, Clock, Phone, PhoneForwarded, PauseCircle, PlayCircle, UserCircle
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getPlatformLogo } from '@/components/PlatformLogos';
@@ -93,12 +93,15 @@ export default function ConversationViewerPage() {
   const [transferModal, setTransferModal] = useState(false);
   const [transferReason, setTransferReason] = useState('');
   const [transferLoading, setTransferLoading] = useState(false);
+  const [profileModal, setProfileModal] = useState(false);
+  const [profileData, setProfileData] = useState<any>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const selectedChannelType = searchParams.get('channel_type') || undefined;
 
   const {
     conversation, messages, loading, error, isPolling, sending,
-    refresh, sendMessage, updateStatus
+    refresh, sendMessage, updateStatus, botPause
   } = useConversation(
     params.project_id as string,
     params.conversation_id as string,
@@ -113,6 +116,10 @@ export default function ConversationViewerPage() {
   const isHandoff = conversation?.status === 'handoff';
   const takeoverUntil = conversation?.metadata?.human_takeover_until;
   const takeoverAgent = conversation?.metadata?.human_agent_name;
+  const isBotPaused = conversation?.metadata?.bot_paused === true;
+  const pausedBy = conversation?.metadata?.bot_paused_by;
+  const pausedUntil = conversation?.metadata?.bot_paused_until;
+  const [pauseMenuOpen, setPauseMenuOpen] = useState(false);
 
   const handleSend = async () => {
     if (!replyText.trim() || sending) return;
@@ -145,6 +152,34 @@ export default function ConversationViewerPage() {
       setSendError(err.message);
     } finally {
       setStatusLoading(false);
+    }
+  };
+
+  const handleBotPause = async (hours: number | null) => {
+    setStatusLoading(true);
+    setPauseMenuOpen(false);
+    try {
+      await botPause(hours);
+    } catch (err: any) {
+      setSendError(err.message);
+    } finally {
+      setStatusLoading(false);
+    }
+  };
+
+  const handleOpenProfile = async () => {
+    setProfileLoading(true);
+    setProfileModal(true);
+    try {
+      const channelParam = selectedChannelType ? `?channel_type=${encodeURIComponent(selectedChannelType)}` : '';
+      const resp = await api.get(
+        `/api/contacts/${params.project_id}/${params.conversation_id}/profile${channelParam}`
+      );
+      setProfileData(resp.data);
+    } catch (err: any) {
+      setSendError('Erro ao carregar perfil');
+    } finally {
+      setProfileLoading(false);
     }
   };
 
@@ -247,7 +282,9 @@ export default function ConversationViewerPage() {
             <div className="flex items-center gap-3 flex-1">
               {getChannelIcon(conversation.channel_type)}
               <div>
-                <h1 className="text-lg font-semibold text-gray-900">
+                <h1 className="text-lg font-semibold text-gray-900 cursor-pointer hover:text-blue-600 transition"
+                    onClick={handleOpenProfile}
+                    title="Ver perfil do contato">
                   {displayName}
                 </h1>
                 <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -283,6 +320,89 @@ export default function ConversationViewerPage() {
               <button onClick={refresh} className="p-2 hover:bg-gray-100 rounded-lg transition" title="Atualizar">
                 <RefreshCw className="w-4 h-4 text-gray-600" />
               </button>
+
+              {/* Bot Pause Dropdown */}
+              <div className="relative">
+                {isBotPaused ? (
+                  <button
+                    onClick={() => handleBotPause(null)}
+                    disabled={statusLoading}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition text-sm font-medium disabled:opacity-50"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    Reativar Bot
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setPauseMenuOpen(!pauseMenuOpen)}
+                    disabled={statusLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition text-sm font-medium disabled:opacity-50"
+                  >
+                    <PauseCircle className="w-4 h-4" />
+                    Pausar Bot
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                )}
+
+                {/* Dropdown Menu */}
+                {pauseMenuOpen && !isBotPaused && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setPauseMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-xl border z-30 py-2">
+                      <p className="px-3 py-1 text-xs text-gray-400 font-medium">PAUSAR BOT POR:</p>
+                      <button
+                        onClick={() => handleBotPause(3)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-amber-50 transition flex items-center gap-3"
+                      >
+                        <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
+                          <Clock className="w-4 h-4 text-amber-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">3 horas</p>
+                          <p className="text-xs text-gray-500">Pausa rápida</p>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => handleBotPause(24)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-orange-50 transition flex items-center gap-3"
+                      >
+                        <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center">
+                          <Clock className="w-4 h-4 text-orange-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">1 dia</p>
+                          <p className="text-xs text-gray-500">Atendimento humano hoje</p>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => handleBotPause(72)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-red-50 transition flex items-center gap-3"
+                      >
+                        <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center">
+                          <Clock className="w-4 h-4 text-red-500" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">3 dias</p>
+                          <p className="text-xs text-gray-500">Lead com atendente</p>
+                        </div>
+                      </button>
+                      <div className="border-t my-1" />
+                      <button
+                        onClick={() => handleBotPause(360)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-red-50 transition flex items-center gap-3"
+                      >
+                        <div className="w-8 h-8 rounded-full bg-red-200 flex items-center justify-center">
+                          <PauseCircle className="w-4 h-4 text-red-700" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-red-700">15 dias</p>
+                          <p className="text-xs text-gray-500">Lead exclusivo do atendente</p>
+                        </div>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
 
               <button
                 onClick={() => setTransferModal(true)}
@@ -341,6 +461,30 @@ export default function ConversationViewerPage() {
                 <span className="font-medium">Bot pausado</span> — Atendimento humano por {takeoverAgent || 'atendente'} até{' '}
                 {new Date(takeoverUntil).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
               </p>
+            </div>
+          )}
+
+          {/* Bot Paused Banner */}
+          {isBotPaused && (
+            <div className="mt-3 p-3 bg-red-100 border border-red-300 rounded-lg flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <PauseCircle className="w-5 h-5 text-red-700 shrink-0" />
+                <p className="text-sm text-red-900">
+                  <span className="font-medium">Bot pausado</span>
+                  {pausedBy && <> por {pausedBy}</>}
+                  {pausedUntil && (
+                    <> até {new Date(pausedUntil).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</>
+                  )}
+                  {' — '}Apenas atendimento humano.
+                </p>
+              </div>
+              <button
+                onClick={() => handleBotPause(null)}
+                disabled={statusLoading}
+                className="px-3 py-1 bg-green-500 text-white rounded-lg text-xs font-medium hover:bg-green-600 transition disabled:opacity-50 shrink-0"
+              >
+                Reativar
+              </button>
             </div>
           )}
 
@@ -665,6 +809,149 @@ export default function ConversationViewerPage() {
                 {transferLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <PhoneForwarded className="w-4 h-4" />}
                 Transferir
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Contact Profile Modal */}
+      {profileModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setProfileModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Perfil do Contato</h2>
+                <button onClick={() => setProfileModal(false)} className="p-1 hover:bg-gray-100 rounded-lg">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {profileLoading ? (
+                <div className="py-8 text-center text-gray-500">Carregando perfil...</div>
+              ) : profileData ? (
+                <div className="space-y-4">
+                  {/* Contact Info */}
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center">
+                      <UserCircle className="w-8 h-8 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold">{profileData.contact_name}</p>
+                      {profileData.phone && (
+                        <a href={`https://wa.me/${profileData.phone}`} target="_blank" rel="noopener noreferrer"
+                           className="text-sm text-green-600 hover:underline">
+                          +{profileData.phone}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Stats */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-gray-50 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-bold text-gray-900">{profileData.stats?.total_messages || 0}</p>
+                      <p className="text-xs text-gray-500">Mensagens</p>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-bold text-blue-600">{profileData.stats?.messages_in || 0}</p>
+                      <p className="text-xs text-gray-500">Recebidas</p>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3 text-center">
+                      <p className="text-2xl font-bold text-green-600">{profileData.stats?.messages_out || 0}</p>
+                      <p className="text-xs text-gray-500">Enviadas</p>
+                    </div>
+                  </div>
+
+                  {/* Details */}
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between py-1 border-b">
+                      <span className="text-gray-500">Canal</span>
+                      <span className="font-medium">{profileData.channel_type}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b">
+                      <span className="text-gray-500">Status</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                        profileData.status === 'open' ? 'bg-green-100 text-green-800' :
+                        profileData.status === 'handoff' ? 'bg-amber-100 text-amber-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>{profileData.status}</span>
+                    </div>
+                    {profileData.stats?.first_message_at && (
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-500">Primeiro contato</span>
+                        <span className="font-medium">{new Date(profileData.stats.first_message_at).toLocaleDateString('pt-BR')}</span>
+                      </div>
+                    )}
+                    {profileData.stats?.last_message_at && (
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-500">Último contato</span>
+                        <span className="font-medium">{new Date(profileData.stats.last_message_at).toLocaleDateString('pt-BR')}</span>
+                      </div>
+                    )}
+                    {profileData.ai_state && (
+                      <div className="flex justify-between py-1 border-b">
+                        <span className="text-gray-500">Estado IA</span>
+                        <span className="font-medium">{profileData.ai_state}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Assignment Info */}
+                  {profileData.assignment && (
+                    <div className="bg-blue-50 rounded-lg p-3">
+                      <p className="text-xs text-blue-500 font-medium mb-1">ATRIBUIÇÃO ATUAL</p>
+                      <p className="text-sm font-medium">{profileData.assignment.assignee_name || 'Sem nome'}</p>
+                      {profileData.assignment.stage_name && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: profileData.assignment.stage_color || '#6366f1' }}></div>
+                          <span className="text-xs text-gray-600">{profileData.assignment.stage_name}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Summary */}
+                  {profileData.summary && (
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <p className="text-xs text-gray-500 font-medium mb-1">RESUMO IA</p>
+                      <p className="text-sm text-gray-700">{profileData.summary}</p>
+                    </div>
+                  )}
+
+                  {/* User Data from bot */}
+                  {profileData.user_data && Object.keys(profileData.user_data).length > 0 && (
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <p className="text-xs text-gray-500 font-medium mb-1">DADOS COLETADOS</p>
+                      <div className="space-y-1">
+                        {Object.entries(profileData.user_data).map(([key, value]) => (
+                          <div key={key} className="flex justify-between text-sm">
+                            <span className="text-gray-500">{key}</span>
+                            <span className="font-medium">{String(value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quick Actions */}
+                  <div className="flex gap-2 pt-2">
+                    {profileData.phone && (
+                      <a href={`https://wa.me/${profileData.phone}`} target="_blank" rel="noopener noreferrer"
+                         className="flex-1 text-center py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600 transition">
+                        WhatsApp
+                      </a>
+                    )}
+                    <button
+                      onClick={() => { setProfileModal(false); }}
+                      className="flex-1 text-center py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-8 text-center text-red-500">Erro ao carregar perfil</div>
+              )}
             </div>
           </div>
         </div>

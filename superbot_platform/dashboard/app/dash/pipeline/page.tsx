@@ -210,6 +210,14 @@ export default function PipelinePage() {
   const [loadingPipelines, setLoadingPipelines] = useState(false);
   const [loadingStages, setLoadingStages] = useState(false);
 
+  // Meus Leads / Pool state
+  const [viewMode, setViewMode] = useState<'pipeline' | 'my-leads' | 'pool'>('pipeline');
+  const [myLeads, setMyLeads] = useState<any[]>([]);
+  const [poolLeads, setPoolLeads] = useState<any[]>([]);
+  const [poolLoading, setPoolLoading] = useState(false);
+  const [autoAssigning, setAutoAssigning] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<any[]>([]);
+
   const pipelineDropdownRef = useRef<HTMLDivElement>(null);
   const fingerprintRef = useRef('');
 
@@ -276,6 +284,48 @@ export default function PipelinePage() {
     loadPipelineStages(tenantId, selectedPipelineId);
   }, [tenantId, selectedPipelineId, loadPipelineStages]);
 
+  const fetchMyLeads = async () => {
+    if (!tenantId) return;
+    try {
+      const resp = await api.get(`/api/pipeline/my-leads/${tenantId}`);
+      setMyLeads(resp.data.leads || []);
+    } catch { setMyLeads([]); }
+  };
+
+  const fetchPool = async () => {
+    if (!tenantId) return;
+    setPoolLoading(true);
+    try {
+      const resp = await api.get(`/api/pipeline/pool/${tenantId}`);
+      setPoolLeads(resp.data.pool || []);
+    } catch { setPoolLeads([]); }
+    finally { setPoolLoading(false); }
+  };
+
+  const fetchTeam = async () => {
+    if (!tenantId) return;
+    try {
+      const resp = await api.get(`/api/pipeline/team/${tenantId}`);
+      setTeamMembers(resp.data.team || []);
+    } catch { setTeamMembers([]); }
+  };
+
+  const handleAutoAssign = async () => {
+    if (!tenantId) return;
+    setAutoAssigning(true);
+    try {
+      const resp = await api.post(`/api/pipeline/auto-assign/${tenantId}`);
+      if (resp.data.assigned) {
+        await fetchMyLeads();
+        await fetchPool();
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Erro ao auto-atribuir lead');
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
+
   const load = useCallback(async (tId: string, isBackground = false) => {
     try {
       if (!isBackground) setLoading(true);
@@ -308,6 +358,12 @@ export default function PipelinePage() {
     const tick = setInterval(() => setLastUpdatedLabel(timeAgo(lastUpdated)), 5000);
     return () => clearInterval(tick);
   }, [lastUpdated]);
+
+  // Load my-leads / pool data when viewMode or tenant changes
+  useEffect(() => {
+    if (viewMode === 'my-leads') fetchMyLeads();
+    if (viewMode === 'pool') { fetchPool(); fetchTeam(); }
+  }, [viewMode, tenantId]);
 
   const convKey = (c: Conversation) => `${c.channel_type}:${c.conversation_id}`;
 
@@ -581,145 +637,272 @@ export default function PipelinePage() {
         </div>
       </div>
 
+      {/* View Mode Tabs */}
+      <div className="flex items-center gap-2 px-4 lg:px-6 pt-3 pb-0 shrink-0">
+        <button
+          onClick={() => setViewMode('pipeline')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${viewMode === 'pipeline' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+        >
+          Pipeline
+        </button>
+        <button
+          onClick={() => setViewMode('my-leads')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${viewMode === 'my-leads' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+        >
+          Meus Leads
+        </button>
+        <button
+          onClick={() => setViewMode('pool')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${viewMode === 'pool' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+        >
+          Pool ({poolLeads.length})
+        </button>
+        {viewMode === 'pool' && (
+          <button
+            onClick={handleAutoAssign}
+            disabled={autoAssigning || poolLeads.length === 0}
+            className="ml-auto px-4 py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600 transition disabled:opacity-50"
+          >
+            {autoAssigning ? 'Atribuindo...' : 'Pegar Próximo Lead'}
+          </button>
+        )}
+      </div>
+
       {/* Kanban - fills remaining viewport */}
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : error ? (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="bg-red-50 text-red-600 p-4 rounded-lg">{error}</div>
-        </div>
-      ) : (
-        <div className="flex-1 flex gap-3 overflow-x-auto px-4 lg:px-6 py-3 min-h-0">
-          {loadingStages && !isDefaultPipeline ? (
+      {viewMode === 'pipeline' && (
+        <>
+          {loading ? (
             <div className="flex-1 flex items-center justify-center">
-              <div className="w-6 h-6 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : error ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="bg-red-50 text-red-600 p-4 rounded-lg">{error}</div>
             </div>
           ) : (
-            activeStages.map((stage, stageIdx) => {
-              const items = activeGrouped?.get(stage.key) || [];
-              return (
-                <div
-                  key={stage.key}
-                  className="flex flex-col w-[280px] min-w-[280px] shrink-0"
-                >
-                  {/* Column header */}
-                  <div className={`border rounded-lg px-3 py-2 ${stage.bgClass} ${stage.borderClass} shrink-0`}>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${stage.dotClass}`} />
-                      <span className="text-xs font-semibold text-gray-800 flex-1">{stage.label}</span>
-                      <span className="text-[10px] font-bold text-gray-600 bg-white/80 border border-gray-200 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
-                        {items.length}
-                      </span>
-                    </div>
-                    {stage.hint && <p className="text-[10px] text-gray-500 mt-0.5 ml-4">{stage.hint}</p>}
-                  </div>
-
-                  {/* Cards container - scrollable */}
-                  <div className="flex-1 mt-2 space-y-1.5 overflow-y-auto min-h-0 pr-1">
-                    {items.length === 0 ? (
-                      <div className="text-[10px] text-gray-400 px-2 py-8 text-center border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
-                        Vazio
+            <div className="flex-1 flex gap-3 overflow-x-auto px-4 lg:px-6 py-3 min-h-0">
+              {loadingStages && !isDefaultPipeline ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="w-6 h-6 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : (
+                activeStages.map((stage, stageIdx) => {
+                  const items = activeGrouped?.get(stage.key) || [];
+                  return (
+                    <div
+                      key={stage.key}
+                      className="flex flex-col w-[280px] min-w-[280px] shrink-0"
+                    >
+                      {/* Column header */}
+                      <div className={`border rounded-lg px-3 py-2 ${stage.bgClass} ${stage.borderClass} shrink-0`}>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${stage.dotClass}`} />
+                          <span className="text-xs font-semibold text-gray-800 flex-1">{stage.label}</span>
+                          <span className="text-[10px] font-bold text-gray-600 bg-white/80 border border-gray-200 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+                            {items.length}
+                          </span>
+                        </div>
+                        {stage.hint && <p className="text-[10px] text-gray-500 mt-0.5 ml-4">{stage.hint}</p>}
                       </div>
-                    ) : (
-                      items.map((conv) => {
-                        const key = convKey(conv);
-                        const currentIdx = isDefaultPipeline ? STAGE_INDEX[inferStage(conv)] : stageIdx;
-                        const canLeft = currentIdx > 0;
-                        const canRight = currentIdx < activeStages.length - 1;
-                        const isMoving = movingCard === key;
 
-                        return (
-                          <div
-                            key={key}
-                            className={`bg-white border border-gray-100 rounded-lg p-2.5 hover:border-blue-200 hover:shadow-sm transition-all cursor-pointer group ${isMoving ? 'scale-95 opacity-70' : ''}`}
-                          >
-                            {/* Click to open conversation */}
-                            <div
-                              onClick={() => router.push(
-                                `/dash/conversations/${encodeURIComponent(conv.project_id)}/${encodeURIComponent(conv.conversation_id)}?channel_type=${encodeURIComponent(conv.channel_type)}`
-                              )}
-                            >
-                              <div className="flex items-center gap-2 mb-1">
-                                <div className="shrink-0">{getPlatformLogo(conv.channel_type, 14) || <MessageCircle className="w-3.5 h-3.5 text-gray-400" />}</div>
-                                <span className="text-xs font-medium text-gray-900 truncate flex-1">
-                                  {conv.contact_name || conv.conversation_id}
-                                </span>
-                                <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                  conv.status === 'open' ? 'bg-green-100 text-green-700' :
-                                  conv.status === 'handoff' ? 'bg-amber-100 text-amber-700' :
-                                  conv.status === 'closed' ? 'bg-gray-100 text-gray-500' :
-                                  'bg-gray-100 text-gray-600'
-                                }`}>
-                                  {conv.status === 'open' ? 'Aberto' :
-                                   conv.status === 'handoff' ? 'Handoff' :
-                                   conv.status === 'closed' ? 'Fechado' :
-                                   conv.status === 'waiting_customer' ? 'Aguard.' :
-                                   conv.status}
-                                </span>
-                              </div>
-                              {conv.last_text && (
-                                <p className="text-[11px] text-gray-500 line-clamp-1 mb-1 ml-5">
-                                  {conv.last_text}
-                                </p>
-                              )}
-                              <div className="flex items-center gap-2 ml-5 text-[10px] text-gray-400">
-                                <Clock className="w-2.5 h-2.5" />
-                                <span>{relativeTime(conv.last_event_at)}</span>
-                                <span>{conv.message_count} msgs</span>
-                              </div>
-                            </div>
-
-                            {/* Move buttons - visible on hover */}
-                            <div className="flex items-center justify-end gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (isDefaultPipeline) {
-                                    moveCard(conv, 'left');
-                                  } else if (customStages && currentIdx > 0) {
-                                    const cKey = convKey(conv);
-                                    setMovingCard(cKey);
-                                    setStageOverrides(prev => ({ ...prev, [cKey]: customStages[currentIdx - 1].key as StageKey }));
-                                    setTimeout(() => setMovingCard(null), 300);
-                                  }
-                                }}
-                                disabled={!canLeft}
-                                className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-default transition"
-                                title={canLeft ? `Mover para ${activeStages[currentIdx - 1].label}` : ''}
-                              >
-                                <ChevronLeft className="w-3.5 h-3.5" />
-                              </button>
-                              <span className="text-[9px] text-gray-400 font-medium">{stage.shortLabel}</span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (isDefaultPipeline) {
-                                    moveCard(conv, 'right');
-                                  } else if (customStages && currentIdx < customStages.length - 1) {
-                                    const cKey = convKey(conv);
-                                    setMovingCard(cKey);
-                                    setStageOverrides(prev => ({ ...prev, [cKey]: customStages[currentIdx + 1].key as StageKey }));
-                                    setTimeout(() => setMovingCard(null), 300);
-                                  }
-                                }}
-                                disabled={!canRight}
-                                className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-default transition"
-                                title={canRight ? `Mover para ${activeStages[currentIdx + 1].label}` : ''}
-                              >
-                                <ChevronRight className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+                      {/* Cards container - scrollable */}
+                      <div className="flex-1 mt-2 space-y-1.5 overflow-y-auto min-h-0 pr-1">
+                        {items.length === 0 ? (
+                          <div className="text-[10px] text-gray-400 px-2 py-8 text-center border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
+                            Vazio
                           </div>
-                        );
-                      })
-                    )}
+                        ) : (
+                          items.map((conv) => {
+                            const key = convKey(conv);
+                            const currentIdx = isDefaultPipeline ? STAGE_INDEX[inferStage(conv)] : stageIdx;
+                            const canLeft = currentIdx > 0;
+                            const canRight = currentIdx < activeStages.length - 1;
+                            const isMoving = movingCard === key;
+
+                            return (
+                              <div
+                                key={key}
+                                className={`bg-white border border-gray-100 rounded-lg p-2.5 hover:border-blue-200 hover:shadow-sm transition-all cursor-pointer group ${isMoving ? 'scale-95 opacity-70' : ''}`}
+                              >
+                                {/* Click to open conversation */}
+                                <div
+                                  onClick={() => router.push(
+                                    `/dash/conversations/${encodeURIComponent(conv.project_id)}/${encodeURIComponent(conv.conversation_id)}?channel_type=${encodeURIComponent(conv.channel_type)}`
+                                  )}
+                                >
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <div className="shrink-0">{getPlatformLogo(conv.channel_type, 14) || <MessageCircle className="w-3.5 h-3.5 text-gray-400" />}</div>
+                                    <span className="text-xs font-medium text-gray-900 truncate flex-1">
+                                      {conv.contact_name || conv.conversation_id}
+                                    </span>
+                                    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                      conv.status === 'open' ? 'bg-green-100 text-green-700' :
+                                      conv.status === 'handoff' ? 'bg-amber-100 text-amber-700' :
+                                      conv.status === 'closed' ? 'bg-gray-100 text-gray-500' :
+                                      'bg-gray-100 text-gray-600'
+                                    }`}>
+                                      {conv.status === 'open' ? 'Aberto' :
+                                       conv.status === 'handoff' ? 'Handoff' :
+                                       conv.status === 'closed' ? 'Fechado' :
+                                       conv.status === 'waiting_customer' ? 'Aguard.' :
+                                       conv.status}
+                                    </span>
+                                  </div>
+                                  {conv.last_text && (
+                                    <p className="text-[11px] text-gray-500 line-clamp-1 mb-1 ml-5">
+                                      {conv.last_text}
+                                    </p>
+                                  )}
+                                  <div className="flex items-center gap-2 ml-5 text-[10px] text-gray-400">
+                                    <Clock className="w-2.5 h-2.5" />
+                                    <span>{relativeTime(conv.last_event_at)}</span>
+                                    <span>{conv.message_count} msgs</span>
+                                  </div>
+                                </div>
+
+                                {/* Move buttons - visible on hover */}
+                                <div className="flex items-center justify-end gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (isDefaultPipeline) {
+                                        moveCard(conv, 'left');
+                                      } else if (customStages && currentIdx > 0) {
+                                        const cKey = convKey(conv);
+                                        setMovingCard(cKey);
+                                        setStageOverrides(prev => ({ ...prev, [cKey]: customStages[currentIdx - 1].key as StageKey }));
+                                        setTimeout(() => setMovingCard(null), 300);
+                                      }
+                                    }}
+                                    disabled={!canLeft}
+                                    className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-default transition"
+                                    title={canLeft ? `Mover para ${activeStages[currentIdx - 1].label}` : ''}
+                                  >
+                                    <ChevronLeft className="w-3.5 h-3.5" />
+                                  </button>
+                                  <span className="text-[9px] text-gray-400 font-medium">{stage.shortLabel}</span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (isDefaultPipeline) {
+                                        moveCard(conv, 'right');
+                                      } else if (customStages && currentIdx < customStages.length - 1) {
+                                        const cKey = convKey(conv);
+                                        setMovingCard(cKey);
+                                        setStageOverrides(prev => ({ ...prev, [cKey]: customStages[currentIdx + 1].key as StageKey }));
+                                        setTimeout(() => setMovingCard(null), 300);
+                                      }
+                                    }}
+                                    disabled={!canRight}
+                                    className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-default transition"
+                                    title={canRight ? `Mover para ${activeStages[currentIdx + 1].label}` : ''}
+                                  >
+                                    <ChevronRight className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Meus Leads view */}
+      {viewMode === 'my-leads' && (
+        <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-3">
+          <div className="space-y-3">
+            {myLeads.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <p className="text-lg font-medium">Nenhum lead atribuído</p>
+                <p className="text-sm">Vá ao Pool para pegar leads do pool compartilhado</p>
+              </div>
+            ) : (
+              myLeads.map((lead) => (
+                <div key={lead.assignment_id}
+                     className="bg-white rounded-lg border p-4 hover:shadow-md transition cursor-pointer"
+                     onClick={() => router.push(`/dash/conversations/${encodeURIComponent(lead.project_id || tenantId)}/${encodeURIComponent(lead.conversation_id)}?channel_type=${encodeURIComponent(lead.channel_type || 'whatsapp')}`)}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: lead.stage_color || '#6366f1' }}></div>
+                      <div>
+                        <p className="font-medium text-gray-900">{lead.contact_name || lead.conversation_id}</p>
+                        <p className="text-sm text-gray-500 truncate max-w-md">{lead.last_text || 'Sem mensagem'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {lead.stage_name && (
+                        <span className="px-2 py-1 text-xs font-medium rounded-full" style={{ backgroundColor: (lead.stage_color || '#6366f1') + '20', color: lead.stage_color || '#6366f1' }}>
+                          {lead.stage_name}
+                        </span>
+                      )}
+                      <span className={`px-2 py-1 text-xs rounded-full ${lead.conv_status === 'open' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {lead.conv_status || lead.status || 'open'}
+                      </span>
+                      {lead.last_event_at && (
+                        <span className="text-xs text-gray-400">{new Date(lead.last_event_at).toLocaleDateString('pt-BR')}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              );
-            })
-          )}
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Pool view */}
+      {viewMode === 'pool' && (
+        <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-3">
+          <div className="space-y-3">
+            {/* Team capacity overview */}
+            {teamMembers.length > 0 && (
+              <div className="bg-white rounded-lg border p-4 mb-4">
+                <h3 className="text-sm font-medium text-gray-500 mb-3">EQUIPE — CAPACIDADE</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {teamMembers.map((m: any) => (
+                    <div key={m.id} className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${m.is_available ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                      <span className="text-sm font-medium">{m.user_name}</span>
+                      <span className="text-xs text-gray-400">{m.active_conversations}/{m.max_concurrent_conversations}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {poolLoading ? (
+              <div className="text-center py-12 text-gray-500">Carregando pool...</div>
+            ) : poolLeads.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <p className="text-lg font-medium">Pool vazio</p>
+                <p className="text-sm">Todos os leads estão atribuídos</p>
+              </div>
+            ) : (
+              poolLeads.map((lead: any) => (
+                <div key={lead.conversation_id} className="bg-white rounded-lg border p-4 hover:shadow-md transition">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-gray-900">{lead.contact_name || lead.conversation_id}</p>
+                      <p className="text-sm text-gray-500 truncate max-w-md">{lead.last_text || 'Sem mensagem'}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400">{lead.channel_type}</span>
+                      {lead.last_event_at && (
+                        <span className="text-xs text-gray-400">{new Date(lead.last_event_at).toLocaleDateString('pt-BR')}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 
