@@ -224,7 +224,7 @@ async def get_admin_overview(
             LEFT JOIN channel_stats chs ON chs.project_id = cp.project_id
             LEFT JOIN agent_stats ags ON ags.project_id = cp.project_id
             LEFT JOIN secret_stats sec ON sec.project_id = cp.project_id
-            ORDER BY cp.name
+            ORDER BY cp.client_name
             """
         ),
         {"since": since, "today_start": today_start},
