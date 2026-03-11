@@ -33,6 +33,7 @@ async def init_db():
     from app.db.models import (
         Base, Client, DashboardUser, Session as SessionModel, VoiceCallHistory,
         MediaLibrary, Pipeline, FollowupStage, LoyaltyClub, ClubMember, ClubCampaign,
+        CampaignDelivery,
     )
 
     dashboard_tables = [
@@ -46,6 +47,7 @@ async def init_db():
         LoyaltyClub.__table__,
         ClubMember.__table__,
         ClubCampaign.__table__,
+        CampaignDelivery.__table__,
     ]
 
     async with engine.begin() as conn:
@@ -151,7 +153,7 @@ async def init_db():
             """))
 
             # Set gen_random_uuid() defaults for new tables
-            for tbl in ['media_library', 'pipelines', 'followup_stages', 'loyalty_clubs', 'club_members', 'club_campaigns']:
+            for tbl in ['media_library', 'pipelines', 'followup_stages', 'loyalty_clubs', 'club_members', 'club_campaigns', 'campaign_deliveries']:
                 await conn.execute(sa_text(f"""
                     ALTER TABLE {tbl} ALTER COLUMN id SET DEFAULT gen_random_uuid()
                 """))
@@ -160,6 +162,11 @@ async def init_db():
             await conn.execute(sa_text("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_club_members_club_phone
                 ON club_members (club_id, phone)
+            """))
+
+            await conn.execute(sa_text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_deliveries_campaign_phone
+                ON campaign_deliveries (campaign_id, phone)
             """))
 
             # F1: Add pipeline_id to pipeline_stages and conversation_assignments

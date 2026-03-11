@@ -565,6 +565,26 @@ class ClubCampaign(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class CampaignDelivery(Base):
+    """Status de entrega por destinatario de campanha."""
+    __tablename__ = "campaign_deliveries"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    campaign_id = Column(Uuid(as_uuid=True), ForeignKey("club_campaigns.id", ondelete="CASCADE"), nullable=False)
+    member_id = Column(Uuid(as_uuid=True), ForeignKey("club_members.id", ondelete="SET NULL"))
+    phone = Column(Text, nullable=False)
+    member_name = Column(Text, default="")
+    status = Column(Text, default="queued")  # queued, sent, delivered, read, failed
+    error_message = Column(Text, default="")
+    meta_message_id = Column(Text)
+    sent_at = Column(DateTime(timezone=True))
+    delivered_at = Column(DateTime(timezone=True))
+    read_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class VoiceCallHistory(Base):
     """Historico de ligacoes ElevenLabs."""
     __tablename__ = "voice_call_history"

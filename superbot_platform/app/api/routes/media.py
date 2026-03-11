@@ -2,29 +2,34 @@
 SuperBot Platform - Media Library API
 Upload, CRUD e busca de midias compartilhadas.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text as sa_text
-from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
+from __future__ import annotations
 
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from sqlalchemy import text as sa_text
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
+from typing import Optional
+
+from app.api.routes.auth import get_current_user
+from app.core.media_storage import (
+    detect_media_type,
+    parse_tags_csv,
+    sanitize_filename,
+    store_uploaded_media,
+)
+from app.core.tenancy import resolve_project_id_for_user
 from app.db.database import get_db
 from app.db.models import DashboardUser
-from app.api.routes.auth import get_current_user
-from app.core.tenancy import resolve_project_id_for_user
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
 
-# ==================== Schemas ====================
-
 class CreateMediaRequest(BaseModel):
-    media_type: str  # image, video, audio, document
+    media_type: str
     url: str
     filename: str
     description: str = ""
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     size_bytes: int = 0
 
 
@@ -33,8 +38,6 @@ class UpdateMediaRequest(BaseModel):
     tags: Optional[list[str]] = None
     filename: Optional[str] = None
 
-
-# ==================== CRUD ====================
 
 @router.get("/{tenant_id}")
 async def list_media(
@@ -68,21 +71,23 @@ async def list_media(
     where_sql = " AND ".join(where)
 
     result = await db.execute(
-        sa_text(f"""
+        sa_text(
+            f"""
             SELECT id, project_id, media_type, url, filename, description, tags,
                    size_bytes, created_at
             FROM media_library
             WHERE {where_sql}
             ORDER BY created_at DESC
             LIMIT :lim OFFSET :off
-        """),
-        params
+            """
+        ),
+        params,
     )
     items = [dict(r) for r in result.mappings().all()]
 
     count_result = await db.execute(
         sa_text(f"SELECT COUNT(*) FROM media_library WHERE {where_sql}"),
-        params
+        params,
     )
     total = count_result.scalar() or 0
 
@@ -96,7 +101,7 @@ async def create_media(
     current_user: DashboardUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Adiciona midia a biblioteca."""
+    """Adiciona midia a biblioteca via URL."""
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Sem permissao")
 
@@ -106,16 +111,88 @@ async def create_media(
         raise HTTPException(status_code=400, detail="media_type invalido")
 
     result = await db.execute(
-        sa_text("""
+        sa_text(
+            """
             INSERT INTO media_library (project_id, media_type, url, filename, description, tags, size_bytes)
             VALUES (CAST(:pid AS uuid), :mtype, :url, :fname, :desc, :tags, :size)
             RETURNING id, project_id, media_type, url, filename, description, tags, size_bytes, created_at
-        """),
+            """
+        ),
         {
-            "pid": project_id, "mtype": body.media_type, "url": body.url,
-            "fname": body.filename, "desc": body.description,
-            "tags": body.tags, "size": body.size_bytes
-        }
+            "pid": project_id,
+            "mtype": body.media_type,
+            "url": body.url,
+            "fname": sanitize_filename(body.filename),
+            "desc": body.description,
+            "tags": body.tags,
+            "size": body.size_bytes,
+        },
+    )
+    item = dict(result.mappings().first())
+    await db.commit()
+    return {"media": item}
+
+
+@router.post("/{tenant_id}/upload")
+async def upload_media(
+    tenant_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    description: str = Form(""),
+    tags: str = Form(""),
+    current_user: DashboardUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Faz upload real de arquivo para storage e cadastra na media library."""
+    if current_user.role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Sem permissao")
+
+    project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
+    original_filename = file.filename or "upload.bin"
+    content = await file.read()
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    try:
+        stored = await store_uploaded_media(
+            db=db,
+            project_id=str(project_id),
+            filename=original_filename,
+            data=content,
+            content_type=file.content_type,
+        )
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=502, detail=f"Falha no upload: {exc}") from exc
+
+    file_url = stored.get("url")
+    if not file_url and stored.get("url_path"):
+        file_url = f"{str(request.base_url).rstrip('/')}{stored['url_path']}"
+
+    if not file_url:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Storage nao retornou URL")
+
+    media_type = detect_media_type(file.content_type, original_filename)
+
+    result = await db.execute(
+        sa_text(
+            """
+            INSERT INTO media_library (project_id, media_type, url, filename, description, tags, size_bytes)
+            VALUES (CAST(:pid AS uuid), :mtype, :url, :fname, :desc, :tags, :size)
+            RETURNING id, project_id, media_type, url, filename, description, tags, size_bytes, created_at
+            """
+        ),
+        {
+            "pid": project_id,
+            "mtype": media_type,
+            "url": file_url,
+            "fname": sanitize_filename(original_filename),
+            "desc": description or "",
+            "tags": parse_tags_csv(tags),
+            "size": len(content),
+        },
     )
     item = dict(result.mappings().first())
     await db.commit()
@@ -138,6 +215,9 @@ async def update_media(
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="Nenhum campo")
+
+    if "filename" in updates:
+        updates["filename"] = sanitize_filename(updates["filename"])
 
     set_clauses = []
     params = {"mid": media_id, "pid": project_id}
@@ -172,12 +252,14 @@ async def delete_media(
     project_id = await resolve_project_id_for_user(tenant_id, current_user, db)
 
     result = await db.execute(
-        sa_text("""
+        sa_text(
+            """
             DELETE FROM media_library
             WHERE id = CAST(:mid AS uuid) AND project_id = CAST(:pid AS uuid)
             RETURNING id
-        """),
-        {"mid": media_id, "pid": project_id}
+            """
+        ),
+        {"mid": media_id, "pid": project_id},
     )
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Midia nao encontrada")
