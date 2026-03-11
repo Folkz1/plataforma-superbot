@@ -293,8 +293,9 @@ def _build_media_payload(
     stored_media: Any,
     raw_payload: dict | None,
 ) -> Any:
-    if stored_media:
-        return stored_media
+    resolved_media = _resolve_stored_media_payload(request, stored_media)
+    if resolved_media:
+        return resolved_media
 
     if channel_type != "whatsapp":
         return stored_media
@@ -326,6 +327,44 @@ def _build_media_payload(
         media_items.append(media_item)
 
     return media_items
+
+
+def _resolve_media_url(base_url: str, value: Any) -> Any:
+    if not isinstance(value, str) or not value.startswith("/"):
+        return value
+    return f"{base_url}{value}"
+
+
+def _resolve_stored_media_payload(request: Request, stored_media: Any) -> Any:
+    if not stored_media:
+        return stored_media
+
+    base_url = str(request.base_url).rstrip("/")
+
+    def _resolve_item(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+
+        resolved = dict(item)
+        fallback_url = resolved.get("url_path")
+
+        resolved["url"] = _resolve_media_url(base_url, resolved.get("url"))
+        resolved["download_url"] = _resolve_media_url(base_url, resolved.get("download_url"))
+        resolved["share_url"] = _resolve_media_url(base_url, resolved.get("share_url"))
+        resolved["original_url"] = _resolve_media_url(base_url, resolved.get("original_url"))
+
+        if fallback_url and not resolved.get("url"):
+            absolute_url = _resolve_media_url(base_url, fallback_url)
+            resolved["url"] = absolute_url
+            resolved["download_url"] = resolved.get("download_url") or absolute_url
+
+        return resolved
+
+    if isinstance(stored_media, list):
+        return [_resolve_item(item) for item in stored_media]
+    if isinstance(stored_media, dict):
+        return _resolve_item(stored_media)
+    return stored_media
 
 
 # ==================== Schemas ====================

@@ -25,6 +25,37 @@ WHATSAPP_MEDIA_TYPES = {"audio", "image", "video", "document", "sticker"}
 META_API_VERSION = "v21.0"
 
 
+def _extract_whatsapp_message_payload(metadata: Optional[dict]) -> dict | None:
+    """Accept both raw message payloads and full webhook envelopes."""
+    candidates: list[dict] = []
+
+    if isinstance(metadata, dict):
+        raw = metadata.get("raw")
+        if isinstance(raw, dict):
+            candidates.append(raw)
+        candidates.append(metadata)
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+
+        if candidate.get("type"):
+            return candidate
+
+        try:
+            entries = candidate.get("entry") or []
+            changes = entries[0].get("changes", []) if entries else []
+            value = changes[0].get("value", {}) if changes else {}
+            messages = value.get("messages", [])
+            message = messages[0] if messages else None
+            if isinstance(message, dict) and message.get("type"):
+                return message
+        except (IndexError, KeyError, TypeError, AttributeError):
+            continue
+
+    return None
+
+
 class ChannelRouter:
     """
     Roteador de mensagens multi-canal.
@@ -721,9 +752,9 @@ class ChannelRouter:
         metadata: Optional[dict],
     ) -> str:
         if channel == "whatsapp":
-            raw = (metadata or {}).get("raw")
-            if isinstance(raw, dict) and raw.get("type"):
-                return str(raw["type"]).lower()
+            message = _extract_whatsapp_message_payload(metadata)
+            if isinstance(message, dict) and message.get("type"):
+                return str(message["type"]).lower()
 
         return "text"
 
@@ -738,7 +769,7 @@ class ChannelRouter:
         if channel != "whatsapp" or message_type not in WHATSAPP_MEDIA_TYPES:
             return None
 
-        raw = (metadata or {}).get("raw")
+        raw = _extract_whatsapp_message_payload(metadata)
         if not isinstance(raw, dict):
             return None
 
@@ -747,21 +778,31 @@ class ChannelRouter:
             return None
 
         media_id = media_data.get("id")
-        if not media_id or not access_token:
+        source_url = media_data.get("url")
+        if not access_token:
             return None
 
         headers = {"Authorization": f"Bearer {access_token}"}
+        meta_info: dict = {}
 
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                meta_resp = await client.get(
-                    f"https://graph.facebook.com/{META_API_VERSION}/{media_id}",
-                    headers=headers,
-                )
-                meta_resp.raise_for_status()
-                meta_info = meta_resp.json()
+                if media_id:
+                    try:
+                        meta_resp = await client.get(
+                            f"https://graph.facebook.com/{META_API_VERSION}/{media_id}",
+                            headers=headers,
+                        )
+                        meta_resp.raise_for_status()
+                        meta_info = meta_resp.json()
+                        source_url = meta_info.get("url") or source_url
+                    except Exception as meta_exc:
+                        logger.warning(
+                            "meta media lookup failed for media_id=%s, using payload url fallback: %s",
+                            media_id,
+                            meta_exc,
+                        )
 
-                source_url = meta_info.get("url")
                 if not source_url:
                     return None
 
@@ -775,7 +816,7 @@ class ChannelRouter:
                 or "application/octet-stream"
             )
             extension = mimetypes.guess_extension(mime_type.split(";")[0].strip()) or ""
-            base_filename = media_data.get("filename") or f"{message_type}_{media_id}{extension}"
+            base_filename = media_data.get("filename") or f"{message_type}_{media_id or uuid4().hex}{extension}"
             filename = sanitize_filename(base_filename)
 
             stored = await store_uploaded_media(
@@ -796,6 +837,12 @@ class ChannelRouter:
             "download_url": stored.get("url"),
             "filename": filename,
         }
+        if stored.get("url_path"):
+            item["url_path"] = stored.get("url_path")
+        if stored.get("share_url"):
+            item["share_url"] = stored.get("share_url")
+        if stored.get("path"):
+            item["path"] = stored.get("path")
 
         caption = media_data.get("caption")
         if caption:
