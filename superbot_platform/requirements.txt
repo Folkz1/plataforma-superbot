@@ -37,6 +37,12 @@ twilio>=8.10.0
 # WebSocket (ElevenLabs Chat Mode)
 websockets>=12.0
 
+# MySQL (Pacific Surf booking system)
+aiomysql>=0.2.0
+
+# Email
+aiosmtplib>=3.0.0
+
 # Utilitários
 PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4

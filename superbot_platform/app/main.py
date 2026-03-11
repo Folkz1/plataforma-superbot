@@ -4,10 +4,14 @@ Dashboard de gerenciamento multi-tenant para bots de conversacao.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
 
 from app.db.database import init_db
+from app.core.loyalty_campaigns import start_loyalty_scheduler, stop_loyalty_scheduler
+from app.core.tools.base import ToolRegistry
 from app.api.routes import (
     auth as auth_routes,
     clients as clients_routes,
@@ -26,6 +30,7 @@ from app.api.routes import (
     media as media_routes,
     loyalty as loyalty_routes,
     followup_stages as followup_stages_routes,
+    agent_tools as agent_tools_routes,
 )
 
 
@@ -35,7 +40,12 @@ from app.api.routes import (
 async def lifespan(app: FastAPI):
     """Startup: garante que tabelas do dashboard existam."""
     await init_db()
-    yield
+    ToolRegistry.register_all()
+    await start_loyalty_scheduler()
+    try:
+        yield
+    finally:
+        await stop_loyalty_scheduler()
 
 
 app = FastAPI(
@@ -44,6 +54,9 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+upload_root = Path(__file__).resolve().parent.parent / "uploads"
+upload_root.mkdir(parents=True, exist_ok=True)
 
 _cors_origins = [
     "http://localhost:3000",
@@ -65,6 +78,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/uploads", StaticFiles(directory=upload_root), name="uploads")
+
 
 # ==================== Routers ====================
 
@@ -85,6 +100,7 @@ app.include_router(onboarding_routes.router)
 app.include_router(media_routes.router)
 app.include_router(loyalty_routes.router)
 app.include_router(followup_stages_routes.router)
+app.include_router(agent_tools_routes.router)
 
 
 # ==================== Health ====================
