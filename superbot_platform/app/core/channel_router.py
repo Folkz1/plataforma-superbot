@@ -56,6 +56,42 @@ def _extract_whatsapp_message_payload(metadata: Optional[dict]) -> dict | None:
     return None
 
 
+def _extract_whatsapp_custom_metadata(metadata: Optional[dict]) -> dict:
+    if not isinstance(metadata, dict):
+        return {}
+
+    custom = metadata.get("metadata")
+    if isinstance(custom, dict):
+        return custom
+
+    return {}
+
+
+def _extract_whatsapp_access_token(metadata: Optional[dict]) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+
+    candidates = [
+        metadata.get("access_token"),
+        _extract_whatsapp_custom_metadata(metadata).get("access_token"),
+    ]
+
+    raw = metadata.get("raw")
+    if isinstance(raw, dict):
+        candidates.extend(
+            [
+                raw.get("access_token"),
+                _extract_whatsapp_custom_metadata(raw).get("access_token"),
+            ]
+        )
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    return ""
+
+
 class ChannelRouter:
     """
     Roteador de mensagens multi-canal.
@@ -119,11 +155,12 @@ class ChannelRouter:
             }
 
         project_id = agent["project_id"]
+        effective_access_token = agent.get("access_token") or _extract_whatsapp_access_token(metadata)
         incoming_message_type = self._detect_incoming_message_type(channel, metadata)
         incoming_media = await self._persist_incoming_media(
             project_id=project_id,
             channel=channel,
-            access_token=agent.get("access_token", ""),
+            access_token=effective_access_token,
             metadata=metadata,
             message_type=incoming_message_type,
         )
@@ -320,7 +357,7 @@ class ChannelRouter:
             "tool_executed": tool_executed,
             "citations": response.get("citations", []),
             "project_id": str(project_id),
-            "access_token": agent.get("access_token")
+            "access_token": effective_access_token,
         }
 
     async def _get_elevenlabs_text_agent(self, project_id) -> Optional[dict]:
@@ -485,7 +522,7 @@ class ChannelRouter:
             "tool_executed": None,
             "citations": [],
             "project_id": str(project_id),
-            "access_token": agent.get("access_token"),
+            "access_token": agent.get("access_token") or _extract_whatsapp_access_token(metadata),
             "success": True,
         }
 
@@ -1144,6 +1181,7 @@ class MetaWebhookHandler:
             Lista de dicts com channel, to, response, access_token
         """
         responses = []
+        payload_metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
 
         for entry in payload.get("entry", []):
             # WhatsApp
@@ -1161,9 +1199,27 @@ class MetaWebhookHandler:
                         push_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
 
                         for message in value.get("messages", []):
+                            enriched_payload = {
+                                "object": payload.get("object"),
+                                "entry": [
+                                    {
+                                        "id": entry.get("id"),
+                                        "changes": [
+                                            {
+                                                "field": change.get("field"),
+                                                "value": value,
+                                            }
+                                        ],
+                                    }
+                                ],
+                                "metadata": payload_metadata if isinstance(payload_metadata, dict) else {},
+                                "phone_number_id": value.get("metadata", {}).get("phone_number_id"),
+                                "push_name": push_name,
+                                "raw": message,
+                            }
                             result = await self._handle_whatsapp_message(
                                 message=message,
-                                metadata=value.get("metadata", {}),
+                                metadata=enriched_payload,
                                 router=router,
                                 push_name=push_name,
                             )
@@ -1232,7 +1288,7 @@ class MetaWebhookHandler:
             message_text=text,
             channel_identifier=phone_number_id,
             audio_url=audio_url,
-            metadata={"phone_number_id": phone_number_id, "push_name": push_name, "raw": message}
+            metadata=metadata,
         )
 
         if result.get("skipped") or result.get("error"):
