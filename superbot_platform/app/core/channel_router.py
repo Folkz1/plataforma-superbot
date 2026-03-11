@@ -5,6 +5,7 @@ Implementa queries reais no banco (channels, projects, project_secrets)
 """
 import json
 import logging
+import mimetypes
 import httpx
 from typing import Optional
 from uuid import uuid4
@@ -13,11 +14,15 @@ from datetime import datetime, timezone
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.media_storage import sanitize_filename, store_uploaded_media
 from app.integrations.gemini import GeminiClient, GeminiRAGManager
 from app.integrations.elevenlabs import ElevenLabsManager
 from app.core.elevenlabs_chat import ElevenLabsChatClient
 
 logger = logging.getLogger("superbot.channel_router")
+
+WHATSAPP_MEDIA_TYPES = {"audio", "image", "video", "document", "sticker"}
+META_API_VERSION = "v21.0"
 
 
 class ChannelRouter:
@@ -83,6 +88,14 @@ class ChannelRouter:
             }
 
         project_id = agent["project_id"]
+        incoming_message_type = self._detect_incoming_message_type(channel, metadata)
+        incoming_media = await self._persist_incoming_media(
+            project_id=project_id,
+            channel=channel,
+            access_token=agent.get("access_token", ""),
+            metadata=metadata,
+            message_type=incoming_message_type,
+        )
 
         # 2. Salva mensagem de entrada
         await self._save_message(
@@ -91,9 +104,10 @@ class ChannelRouter:
             channel_identifier=channel_identifier,
             conversation_id=sender_id,
             direction="in",
-            message_type="text",
+            message_type=incoming_message_type,
             text=message_text,
-            raw_payload=metadata
+            raw_payload=metadata,
+            media=incoming_media,
         )
 
         # 3. Verifica se conversa está pausada ou em handoff
@@ -676,16 +690,17 @@ class ChannelRouter:
         direction: str,
         message_type: str,
         text: str,
-        raw_payload: dict = None
+        raw_payload: dict = None,
+        media: list[dict] | dict | None = None,
     ):
         """Salva mensagem em conversation_events."""
         await self.db.execute(
             sa_text("""
                 INSERT INTO conversation_events
                     (id, project_id, channel_type, channel_identifier,
-                     conversation_id, direction, message_type, text, raw_payload)
+                     conversation_id, direction, message_type, text, media, raw_payload)
                 VALUES
-                    (gen_random_uuid(), :pid, :ct, :ci, :cid, :dir, :mt, :txt, CAST(:rp AS jsonb))
+                    (gen_random_uuid(), :pid, :ct, :ci, :cid, :dir, :mt, :txt, CAST(:media AS jsonb), CAST(:rp AS jsonb))
             """),
             {
                 "pid": str(project_id),
@@ -695,9 +710,98 @@ class ChannelRouter:
                 "dir": direction,
                 "mt": message_type,
                 "txt": text,
+                "media": json.dumps(media) if media else None,
                 "rp": json.dumps(raw_payload) if raw_payload else None
             }
         )
+
+    def _detect_incoming_message_type(
+        self,
+        channel: str,
+        metadata: Optional[dict],
+    ) -> str:
+        if channel == "whatsapp":
+            raw = (metadata or {}).get("raw")
+            if isinstance(raw, dict) and raw.get("type"):
+                return str(raw["type"]).lower()
+
+        return "text"
+
+    async def _persist_incoming_media(
+        self,
+        project_id,
+        channel: str,
+        access_token: str,
+        metadata: Optional[dict],
+        message_type: str,
+    ) -> list[dict] | None:
+        if channel != "whatsapp" or message_type not in WHATSAPP_MEDIA_TYPES:
+            return None
+
+        raw = (metadata or {}).get("raw")
+        if not isinstance(raw, dict):
+            return None
+
+        media_data = raw.get(message_type)
+        if not isinstance(media_data, dict):
+            return None
+
+        media_id = media_data.get("id")
+        if not media_id or not access_token:
+            return None
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                meta_resp = await client.get(
+                    f"https://graph.facebook.com/{META_API_VERSION}/{media_id}",
+                    headers=headers,
+                )
+                meta_resp.raise_for_status()
+                meta_info = meta_resp.json()
+
+                source_url = meta_info.get("url")
+                if not source_url:
+                    return None
+
+                media_resp = await client.get(source_url, headers=headers)
+                media_resp.raise_for_status()
+
+            mime_type = (
+                meta_info.get("mime_type")
+                or media_data.get("mime_type")
+                or media_resp.headers.get("Content-Type")
+                or "application/octet-stream"
+            )
+            extension = mimetypes.guess_extension(mime_type.split(";")[0].strip()) or ""
+            base_filename = media_data.get("filename") or f"{message_type}_{media_id}{extension}"
+            filename = sanitize_filename(base_filename)
+
+            stored = await store_uploaded_media(
+                db=self.db,
+                project_id=str(project_id),
+                filename=filename,
+                data=media_resp.content,
+                content_type=mime_type,
+            )
+        except Exception as exc:
+            logger.exception("failed to persist incoming media for conversation: %s", exc)
+            return None
+
+        item = {
+            "type": message_type,
+            "mime_type": mime_type,
+            "url": stored.get("url"),
+            "download_url": stored.get("url"),
+            "filename": filename,
+        }
+
+        caption = media_data.get("caption")
+        if caption:
+            item["caption"] = caption
+
+        return [item]
 
     async def _update_conversation_state(
         self,
