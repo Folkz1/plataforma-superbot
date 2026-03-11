@@ -68,8 +68,8 @@ class SendEmailTool(BaseTool):
     description = "Send Pacific Surf booking links to customer email"
 
     async def execute(self, params: dict[str, Any], context: dict[str, Any] | None = None) -> dict:
-        email = params.get("email", "").strip()
-        name = params.get("name", "Surfer").strip()
+        email = (params.get("email") or params.get("to_email") or "").strip()
+        name = (params.get("name") or params.get("customer_name") or "Surfer").strip()
 
         if not email or "@" not in email:
             return {"Status": "Error: invalid email address"}
