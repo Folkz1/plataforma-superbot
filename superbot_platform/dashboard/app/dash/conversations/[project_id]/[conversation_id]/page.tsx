@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { useConversation } from '@/hooks/useConversation';
 import {
   ArrowLeft, MessageCircle, User, Bot, Wrench,
   RefreshCw, Send, HandMetal, RotateCcw, Share2, Copy, Check, X,
-  AlertTriangle, Clock, Phone, PhoneForwarded, PauseCircle, PlayCircle, UserCircle
+  AlertTriangle, Clock, Phone, PhoneForwarded, PauseCircle, PlayCircle, UserCircle,
+  MoreHorizontal
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getPlatformLogo } from '@/components/PlatformLogos';
@@ -96,6 +97,7 @@ export default function ConversationViewerPage() {
   const [profileModal, setProfileModal] = useState(false);
   const [profileData, setProfileData] = useState<any>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   const selectedChannelType = searchParams.get('channel_type') || undefined;
 
@@ -109,9 +111,14 @@ export default function ConversationViewerPage() {
     { pollInterval: 5000 }
   );
 
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !['tool_call', 'tool_result'].includes(message.message_type)),
+    [messages]
+  );
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [visibleMessages.length]);
 
   const isHandoff = conversation?.status === 'handoff';
   const takeoverUntil = conversation?.metadata?.human_takeover_until;
@@ -241,11 +248,11 @@ export default function ConversationViewerPage() {
   };
 
   const getMessageLabel = (msg: Message) => {
-    if (msg.message_type === 'tool_call' || msg.message_type === 'tool_result') return 'Tool Call';
-    if (msg.message_type === 'status_change') return 'Sistema';
+    if (msg.message_type === 'tool_call' || msg.message_type === 'tool_result') return 'Atualização interna';
+    if (msg.message_type === 'status_change') return 'Atualização';
     if (msg.message_type === 'human_reply') return takeoverAgent || 'Atendente';
     if (msg.direction === 'in') return displayName;
-    return 'Assistente';
+    return 'Equipe';
   };
 
   if (loading) {
@@ -288,7 +295,7 @@ export default function ConversationViewerPage() {
                   {displayName}
                 </h1>
                 <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <span>{conversation.channel_type} • {messages.length} mensagens</span>
+                  <span>{visibleMessages.length} mensagens</span>
                   {conversation.channel_type === 'whatsapp' && conversation.conversation_id && (
                     <a
                       href={`https://wa.me/${conversation.conversation_id}`}
@@ -309,7 +316,7 @@ export default function ConversationViewerPage() {
               {isPolling && (
                 <div className="flex items-center gap-2 px-3 py-1 bg-green-50 border border-green-200 rounded-full">
                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                  <span className="text-xs text-green-700 font-medium">Ao vivo</span>
+                  <span className="text-xs text-green-700 font-medium">Atualizando</span>
                 </div>
               )}
 
@@ -320,6 +327,41 @@ export default function ConversationViewerPage() {
               <button onClick={refresh} className="p-2 hover:bg-gray-100 rounded-lg transition" title="Atualizar">
                 <RefreshCw className="w-4 h-4 text-gray-600" />
               </button>
+
+              <div className="relative">
+                <button
+                  onClick={() => setMoreMenuOpen(!moreMenuOpen)}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition"
+                  title="Mais ações"
+                >
+                  <MoreHorizontal className="w-4 h-4 text-gray-600" />
+                </button>
+                {moreMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setMoreMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-xl border z-30 py-2">
+                      <button
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          handleOpenProfile();
+                        }}
+                        className="w-full text-left px-3 py-2.5 hover:bg-gray-50 transition text-sm text-gray-700"
+                      >
+                        Ver perfil do contato
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          handleShare();
+                        }}
+                        className="w-full text-left px-3 py-2.5 hover:bg-gray-50 transition text-sm text-gray-700"
+                      >
+                        Compartilhar acompanhamento
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
 
               {/* Bot Pause Dropdown */}
               <div className="relative">
@@ -339,7 +381,7 @@ export default function ConversationViewerPage() {
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition text-sm font-medium disabled:opacity-50"
                   >
                     <PauseCircle className="w-4 h-4" />
-                    Pausar Bot
+                    Pausar
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                   </button>
                 )}
@@ -408,10 +450,10 @@ export default function ConversationViewerPage() {
                 onClick={() => setTransferModal(true)}
                 disabled={statusLoading || isHandoff}
                 className="flex items-center gap-2 px-3 py-1.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm font-medium disabled:opacity-50"
-                title="Transferir para humano com notificacao WhatsApp"
+                title="Encaminhar para atendimento humano"
               >
                 <PhoneForwarded className="w-4 h-4" />
-                Transferir
+                Encaminhar
               </button>
 
               {!isHandoff ? (
@@ -502,7 +544,7 @@ export default function ConversationViewerPage() {
       {/* Messages */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="space-y-4">
-          {messages.map((message) => {
+          {visibleMessages.map((message) => {
             const isIncoming = message.direction === 'in';
             const isSystem = message.direction === 'system';
             const isToolCall = message.message_type === 'tool_call' || message.message_type === 'tool_result';
@@ -605,7 +647,7 @@ export default function ConversationViewerPage() {
                                         rel="noopener noreferrer"
                                         className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
                                       >
-                                        Abrir audio
+                                        Abrir arquivo
                                       </a>
                                     )}
                                     {item.share_url && (
@@ -615,7 +657,7 @@ export default function ConversationViewerPage() {
                                         rel="noopener noreferrer"
                                         className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
                                       >
-                                        Nextcloud
+                                        Abrir link
                                       </a>
                                     )}
                                   </div>
@@ -642,7 +684,7 @@ export default function ConversationViewerPage() {
                                       rel="noopener noreferrer"
                                       className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
                                     >
-                                      Abrir imagem
+                                      Abrir arquivo
                                     </a>
                                     {item.share_url && (
                                       <a
@@ -651,7 +693,7 @@ export default function ConversationViewerPage() {
                                         rel="noopener noreferrer"
                                         className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
                                       >
-                                        Nextcloud
+                                        Abrir link
                                       </a>
                                     )}
                                   </div>
@@ -676,7 +718,7 @@ export default function ConversationViewerPage() {
                                       rel="noopener noreferrer"
                                       className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
                                     >
-                                      Abrir video
+                                      Abrir arquivo
                                     </a>
                                     {item.share_url && (
                                       <a
@@ -685,7 +727,7 @@ export default function ConversationViewerPage() {
                                         rel="noopener noreferrer"
                                         className={`underline ${isIncoming || isToolCall || isHuman ? 'text-gray-600 hover:text-gray-800' : 'text-blue-100 hover:text-white'}`}
                                       >
-                                        Nextcloud
+                                        Abrir link
                                       </a>
                                     )}
                                   </div>
@@ -731,7 +773,7 @@ export default function ConversationViewerPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        {messages.length === 0 && !loading && (
+        {visibleMessages.length === 0 && !loading && (
           <div className="text-center py-12">
             <MessageCircle className="w-12 h-12 text-gray-400 mx-auto mb-3" />
             <p className="text-gray-600">Nenhuma mensagem nesta conversa</p>
@@ -756,7 +798,7 @@ export default function ConversationViewerPage() {
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-              placeholder={isHandoff ? 'Responder como atendente...' : 'Enviar mensagem (vai pausar o bot por 3h)...'}
+              placeholder="Responder ao contato..."
               className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               disabled={sending}
             />
@@ -776,13 +818,13 @@ export default function ConversationViewerPage() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setTransferModal(false)}>
           <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">Transferir para Humano</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Encaminhar atendimento</h3>
               <button onClick={() => setTransferModal(false)} className="p-1 hover:bg-gray-100 rounded">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <p className="text-sm text-gray-600 mb-4">
-              A conversa sera marcada como &quot;handoff&quot; por 8 horas e uma notificacao sera enviada via WhatsApp para o responsavel do projeto.
+              A conversa será encaminhada para atendimento humano por 8 horas e o responsável será avisado.
             </p>
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">Motivo (opcional)</label>
@@ -865,10 +907,6 @@ export default function ConversationViewerPage() {
                   {/* Details */}
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between py-1 border-b">
-                      <span className="text-gray-500">Canal</span>
-                      <span className="font-medium">{profileData.channel_type}</span>
-                    </div>
-                    <div className="flex justify-between py-1 border-b">
                       <span className="text-gray-500">Status</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                         profileData.status === 'open' ? 'bg-green-100 text-green-800' :
@@ -886,12 +924,6 @@ export default function ConversationViewerPage() {
                       <div className="flex justify-between py-1 border-b">
                         <span className="text-gray-500">Último contato</span>
                         <span className="font-medium">{new Date(profileData.stats.last_message_at).toLocaleDateString('pt-BR')}</span>
-                      </div>
-                    )}
-                    {profileData.ai_state && (
-                      <div className="flex justify-between py-1 border-b">
-                        <span className="text-gray-500">Estado IA</span>
-                        <span className="font-medium">{profileData.ai_state}</span>
                       </div>
                     )}
                   </div>
@@ -938,7 +970,7 @@ export default function ConversationViewerPage() {
                     {profileData.phone && (
                       <a href={`https://wa.me/${profileData.phone}`} target="_blank" rel="noopener noreferrer"
                          className="flex-1 text-center py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600 transition">
-                        WhatsApp
+                        Abrir contato
                       </a>
                     )}
                     <button
