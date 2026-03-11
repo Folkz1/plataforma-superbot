@@ -58,9 +58,16 @@ class ToolRegistry:
 
     @classmethod
     def register_all(cls) -> None:
-        """Import and register all built-in tools."""
-        from app.core.tools.pacific_booking import SearchPurchaseTool, SearchPhoneTool
-        from app.core.tools.email_sender import SendEmailTool
+        """Import and register all built-in tools. Graceful on missing deps."""
+        try:
+            from app.core.tools.pacific_booking import SearchPurchaseTool, SearchPhoneTool
+            cls.register(SearchPurchaseTool())
+            cls.register(SearchPhoneTool())
+        except Exception as e:
+            logger.warning(f"[TOOLS] Could not load pacific_booking: {e}")
 
-        for tool_cls in [SearchPurchaseTool, SearchPhoneTool, SendEmailTool]:
-            cls.register(tool_cls())
+        try:
+            from app.core.tools.email_sender import SendEmailTool
+            cls.register(SendEmailTool())
+        except Exception as e:
+            logger.warning(f"[TOOLS] Could not load email_sender: {e}")
