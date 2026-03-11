@@ -1,5 +1,9 @@
 import axios, { AxiosRequestConfig } from 'axios';
 
+type QueryParams = Record<string, string | number | boolean | undefined>;
+type ApiPayload = Record<string, unknown> | FormData | undefined;
+type ApiHeaders = Record<string, string>;
+
 // Runtime API URL - fetched once from /api/config (Next.js server route)
 let _apiUrl = '';
 let _resolved = false;
@@ -50,7 +54,7 @@ async function refreshToken(): Promise<string | null> {
           localStorage.setItem('token', next);
           return next;
         }
-      } catch (_) {
+      } catch {
         // ignore
       }
       return null;
@@ -64,34 +68,63 @@ async function refreshToken(): Promise<string | null> {
 
 // Create a proxy-like api object that resolves the URL before each call
 function makeRequest(method: string) {
-  return async (url: string, dataOrConfig?: any, config?: AxiosRequestConfig) => {
+  return async (
+    url: string,
+    dataOrConfig?: ApiPayload | AxiosRequestConfig,
+    config?: AxiosRequestConfig,
+  ) => {
     const baseUrl = await getApiUrl();
     const fullUrl = `${baseUrl}${url}`;
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+    const isFormData =
+      typeof FormData !== 'undefined' && dataOrConfig instanceof FormData;
+    const defaultHeaders: ApiHeaders = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
+    if (!isFormData) {
+      defaultHeaders['Content-Type'] = 'application/json';
+    }
 
     const isAuthRoute = url.startsWith('/api/auth/');
 
-    const doRequest = (reqHeaders: Record<string, string>) => {
+    const doRequest = (reqHeaders: ApiHeaders) => {
       // axios.get/delete signature: (url, config)
       // axios.post/put/patch signature: (url, data, config)
       if (method === 'get' || method === 'delete') {
-        return axios[method as 'get'](fullUrl, { ...(dataOrConfig || {}), headers: reqHeaders });
+        const requestConfig =
+          (dataOrConfig as AxiosRequestConfig | undefined) || undefined;
+        return axios.request({
+          ...(requestConfig || {}),
+          method,
+          url: fullUrl,
+          headers: reqHeaders,
+        });
       }
-      return (axios as any)[method](fullUrl, dataOrConfig, { ...(config || {}), headers: reqHeaders });
+      return axios.request({
+        ...(config || {}),
+        method,
+        url: fullUrl,
+        data: dataOrConfig,
+        headers: reqHeaders,
+      });
+    };
+
+    const requestHeaders = {
+      ...(config?.headers as ApiHeaders | undefined),
+      ...defaultHeaders,
     };
 
     try {
-      return await doRequest(headers);
-    } catch (err: any) {
-      const status = err?.response?.status;
+      return await doRequest(requestHeaders);
+    } catch (err: unknown) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
       if (status === 401 && !isAuthRoute) {
         const nextToken = await refreshToken();
         if (nextToken) {
-          return await doRequest({ ...headers, Authorization: `Bearer ${nextToken}` });
+          return await doRequest({
+            ...requestHeaders,
+            Authorization: `Bearer ${nextToken}`,
+          });
         }
         clearAuthStorage();
         if (typeof window !== 'undefined') window.location.href = '/login';
@@ -121,22 +154,23 @@ export const authAPI = {
 export const clientsAPI = {
   list: () => api.get('/api/clients'),
   get: (id: string) => api.get(`/api/clients/${id}`),
-  create: (data: any) => api.post('/api/clients', data),
-  update: (id: string, data: any) => api.patch(`/api/clients/${id}`, data),
+  create: (data: Record<string, unknown>) => api.post('/api/clients', data),
+  update: (id: string, data: Record<string, unknown>) =>
+    api.patch(`/api/clients/${id}`, data),
   delete: (id: string) => api.delete(`/api/clients/${id}`),
 };
 
 // Conversations API
 export const conversationsAPI = {
-  list: (params?: any) => api.get('/api/conversations', { params }),
+  list: (params?: QueryParams) => api.get('/api/conversations', { params }),
   get: (projectId: string, conversationId: string) =>
     api.get(`/api/conversations/${projectId}/${conversationId}`),
-  stats: (params?: any) => api.get('/api/conversations/stats', { params }),
+  stats: (params?: QueryParams) => api.get('/api/conversations/stats', { params }),
 };
 
 // Contacts API
 export const contactsAPI = {
-  list: (params?: any) => api.get('/api/contacts', { params }),
+  list: (params?: QueryParams) => api.get('/api/contacts', { params }),
 };
 
 // Analytics API

@@ -1,14 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import {
-  Image, Video, Music, FileText, Plus, Trash2, Search,
-  Edit2, Save, X, Loader2, Filter,
+  Edit2,
+  ExternalLink,
+  FileText,
+  Filter,
+  Image,
+  Loader2,
+  Music,
+  Plus,
+  Save,
+  Search,
+  Trash2,
+  Upload,
+  Video,
+  X,
 } from 'lucide-react';
-
-// ─── Types ─────────────────────────────────────────────────
 
 interface MediaItem {
   id: string;
@@ -47,7 +57,7 @@ const EMPTY_FORM: MediaForm = {
 };
 
 function getTypeConfig(type: string) {
-  return MEDIA_TYPES.find(t => t.value === type) || MEDIA_TYPES[0];
+  return MEDIA_TYPES.find((item) => item.value === type) || MEDIA_TYPES[0];
 }
 
 function formatSize(bytes: number): string {
@@ -57,126 +67,170 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ─── Component ─────────────────────────────────────────────
+function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error && 'response' in error) {
+    const detail = (
+      error as { response?: { data?: { detail?: string } } }
+    ).response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+  }
+  return fallback;
+}
 
 export default function MediaPage() {
   const router = useRouter();
+
   const [tenantId, setTenantId] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Filters
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('');
 
-  // Add modal
   const [showAddModal, setShowAddModal] = useState(false);
   const [addForm, setAddForm] = useState<MediaForm>({ ...EMPTY_FORM });
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Inline edit
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDesc, setEditDesc] = useState('');
   const [editTags, setEditTags] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
-  // Delete
   const [deleteTarget, setDeleteTarget] = useState<MediaItem | null>(null);
-
-  // ─── Init ──────────────────────────────────────────────
+  const [previewTarget, setPreviewTarget] = useState<MediaItem | null>(null);
 
   useEffect(() => {
     const userData = localStorage.getItem('user');
-    if (!userData) { router.push('/login'); return; }
+    if (!userData) {
+      router.push('/login');
+      return;
+    }
+
     const user = JSON.parse(userData);
+    const nextTenantId =
+      user.role === 'admin'
+        ? localStorage.getItem('active_tenant_id')
+        : user.client_id;
 
-    const tId = user.role === 'admin'
-      ? localStorage.getItem('active_tenant_id')
-      : user.client_id;
-
-    if (!tId) {
+    if (!nextTenantId) {
       router.push(user.role === 'admin' ? '/admin' : '/login');
       return;
     }
 
-    setTenantId(tId);
-    loadMedia(tId);
+    setTenantId(nextTenantId);
+    void loadMedia(nextTenantId);
   }, [router]);
 
   useEffect(() => {
-    if (msg) {
-      const t = setTimeout(() => setMsg(null), 4000);
-      return () => clearTimeout(t);
-    }
+    if (!msg) return;
+    const timer = window.setTimeout(() => setMsg(null), 4000);
+    return () => window.clearTimeout(timer);
   }, [msg]);
 
-  // ─── Data ──────────────────────────────────────────────
-
-  const loadMedia = useCallback(async (tId: string) => {
+  const loadMedia = async (nextTenantId: string) => {
     setLoading(true);
     try {
-      const res = await api.get(`/api/media/${tId}`);
-      setMedia(res.data.media || []);
-      setTotal(res.data.total || 0);
-    } catch (err) {
-      console.error('Erro ao carregar media:', err);
+      const res = await api.get(`/api/media/${nextTenantId}`);
+      setMedia(res.data?.media || []);
+      setTotal(res.data?.total || 0);
+    } catch {
       setMsg({ type: 'error', text: 'Erro ao carregar biblioteca de media' });
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  // ─── Filtered ──────────────────────────────────────────
+  };
 
   const filteredMedia = useMemo(() => {
-    let list = media;
+    let items = media;
     if (filterType) {
-      list = list.filter(m => m.media_type === filterType);
+      items = items.filter((item) => item.media_type === filterType);
     }
     if (search.trim()) {
-      const s = search.toLowerCase();
-      list = list.filter(m =>
-        m.filename.toLowerCase().includes(s) ||
-        m.description?.toLowerCase().includes(s)
+      const query = search.toLowerCase();
+      items = items.filter(
+        (item) =>
+          item.filename.toLowerCase().includes(query) ||
+          item.description?.toLowerCase().includes(query)
       );
     }
-    return list;
-  }, [media, filterType, search]);
+    return items;
+  }, [filterType, media, search]);
 
-  // ─── Add ──────────────────────────────────────────────
+  const openAddModal = () => {
+    setAddForm({ ...EMPTY_FORM });
+    setUploadFile(null);
+    setShowAddModal(true);
+  };
+
+  const handleFileSelection = (file: File | null) => {
+    setUploadFile(file);
+    if (!file) return;
+
+    const inferredType = file.type.startsWith('image/')
+      ? 'image'
+      : file.type.startsWith('video/')
+        ? 'video'
+        : file.type.startsWith('audio/')
+          ? 'audio'
+          : 'document';
+
+    setAddForm((current) => ({
+      ...current,
+      media_type: inferredType,
+      filename: file.name,
+      size_bytes: file.size,
+    }));
+  };
 
   const handleAdd = async () => {
-    if (!addForm.url || !addForm.filename) {
-      setMsg({ type: 'error', text: 'URL e nome do arquivo sao obrigatorios' });
-      return;
-    }
+    if (!tenantId) return;
     setSaving(true);
+
     try {
-      const tags = addForm.tags
-        ? addForm.tags.split(',').map(t => t.trim()).filter(Boolean)
-        : [];
-      await api.post(`/api/media/${tenantId}`, {
-        media_type: addForm.media_type,
-        url: addForm.url,
-        filename: addForm.filename,
-        description: addForm.description,
-        tags,
-        size_bytes: addForm.size_bytes || 0,
-      });
+      if (uploadFile) {
+        const formData = new FormData();
+        formData.append('file', uploadFile);
+        formData.append('description', addForm.description);
+        formData.append('tags', addForm.tags);
+        await api.post(`/api/media/${tenantId}/upload`, formData);
+      } else {
+        if (!addForm.url || !addForm.filename) {
+          setMsg({ type: 'error', text: 'URL e nome do arquivo sao obrigatorios' });
+          setSaving(false);
+          return;
+        }
+        const tags = addForm.tags
+          ? addForm.tags.split(',').map((tag) => tag.trim()).filter(Boolean)
+          : [];
+        await api.post(`/api/media/${tenantId}`, {
+          media_type: addForm.media_type,
+          url: addForm.url,
+          filename: addForm.filename,
+          description: addForm.description,
+          tags,
+          size_bytes: addForm.size_bytes || 0,
+        });
+      }
+
       setMsg({ type: 'success', text: 'Media adicionada com sucesso' });
       setShowAddModal(false);
       setAddForm({ ...EMPTY_FORM });
+      setUploadFile(null);
       await loadMedia(tenantId);
-    } catch (e: any) {
-      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao adicionar media' });
+    } catch (err: unknown) {
+      setMsg({
+        type: 'error',
+        text: getApiErrorMessage(err, 'Erro ao adicionar media'),
+      });
     } finally {
       setSaving(false);
     }
   };
-
-  // ─── Edit ──────────────────────────────────────────────
 
   const startEdit = (item: MediaItem) => {
     setEditingId(item.id);
@@ -195,7 +249,7 @@ export default function MediaPage() {
     setEditSaving(true);
     try {
       const tags = editTags
-        ? editTags.split(',').map(t => t.trim()).filter(Boolean)
+        ? editTags.split(',').map((tag) => tag.trim()).filter(Boolean)
         : [];
       await api.patch(`/api/media/${tenantId}/${editingId}`, {
         description: editDesc,
@@ -204,14 +258,15 @@ export default function MediaPage() {
       setMsg({ type: 'success', text: 'Media atualizada' });
       cancelEdit();
       await loadMedia(tenantId);
-    } catch (e: any) {
-      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao atualizar media' });
+    } catch (err: unknown) {
+      setMsg({
+        type: 'error',
+        text: getApiErrorMessage(err, 'Erro ao atualizar media'),
+      });
     } finally {
       setEditSaving(false);
     }
   };
-
-  // ─── Delete ──────────────────────────────────────────
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -220,12 +275,49 @@ export default function MediaPage() {
       setMsg({ type: 'success', text: `${deleteTarget.filename} removido` });
       setDeleteTarget(null);
       await loadMedia(tenantId);
-    } catch (e: any) {
-      setMsg({ type: 'error', text: e?.response?.data?.detail || 'Erro ao deletar media' });
+    } catch (err: unknown) {
+      setMsg({
+        type: 'error',
+        text: getApiErrorMessage(err, 'Erro ao deletar media'),
+      });
     }
   };
 
-  // ─── Render ──────────────────────────────────────────
+  const renderPreview = (item: MediaItem, className: string) => {
+    if (item.media_type === 'image') {
+      return (
+        <img
+          src={item.url}
+          alt={item.filename}
+          className={`${className} object-cover`}
+        />
+      );
+    }
+    if (item.media_type === 'video') {
+      return <video src={item.url} className={`${className} object-cover`} controls />;
+    }
+    if (item.media_type === 'audio') {
+      return (
+        <div className={`${className} bg-green-50 border border-green-100 flex items-center justify-center p-3`}>
+          <audio src={item.url} controls className="w-full" />
+        </div>
+      );
+    }
+    if (item.url.toLowerCase().includes('.pdf')) {
+      return (
+        <iframe
+          src={item.url}
+          title={item.filename}
+          className={`${className} bg-white`}
+        />
+      );
+    }
+    return (
+      <div className={`${className} bg-orange-50 border border-orange-100 flex items-center justify-center`}>
+        <FileText className="w-10 h-10 text-orange-500" />
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -237,7 +329,6 @@ export default function MediaPage() {
 
   return (
     <div className="p-6 lg:p-8">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
@@ -249,7 +340,7 @@ export default function MediaPage() {
           </div>
         </div>
         <button
-          onClick={() => { setAddForm({ ...EMPTY_FORM }); setShowAddModal(true); }}
+          onClick={openAddModal}
           className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
         >
           <Plus size={16} />
@@ -257,7 +348,6 @@ export default function MediaPage() {
         </button>
       </div>
 
-      {/* Messages */}
       {msg && (
         <div className={`mb-4 p-3 rounded-lg flex items-center gap-2 text-sm ${
           msg.type === 'success'
@@ -268,7 +358,6 @@ export default function MediaPage() {
         </div>
       )}
 
-      {/* Filters */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-6">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex-1 min-w-[220px] relative">
@@ -278,7 +367,7 @@ export default function MediaPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por nome ou descricao..."
-              className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -286,18 +375,17 @@ export default function MediaPage() {
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm"
             >
               <option value="">Todos os tipos</option>
-              {MEDIA_TYPES.map(t => (
-                <option key={t.value} value={t.value}>{t.label}</option>
+              {MEDIA_TYPES.map((type) => (
+                <option key={type.value} value={type.value}>{type.label}</option>
               ))}
             </select>
           </div>
         </div>
       </div>
 
-      {/* Media Grid */}
       {filteredMedia.length === 0 ? (
         <div className="text-center py-16">
           <Image size={48} className="mx-auto mb-3 text-gray-300" />
@@ -316,7 +404,13 @@ export default function MediaPage() {
                 key={item.id}
                 className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition"
               >
-                {/* Header */}
+                <button
+                  onClick={() => setPreviewTarget(item)}
+                  className="w-full mb-3 text-left"
+                >
+                  {renderPreview(item, 'h-44 w-full rounded-xl border border-gray-200')}
+                </button>
+
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={`w-10 h-10 rounded-lg ${cfg.bg} flex items-center justify-center flex-shrink-0`}>
@@ -327,7 +421,7 @@ export default function MediaPage() {
                         {item.filename}
                       </p>
                       <p className="text-xs text-gray-400">
-                        {cfg.label} &middot; {formatSize(item.size_bytes)}
+                        {cfg.label} · {formatSize(item.size_bytes)}
                       </p>
                     </div>
                   </div>
@@ -338,14 +432,12 @@ export default function MediaPage() {
                           onClick={handleEdit}
                           disabled={editSaving}
                           className="p-1.5 text-green-600 hover:bg-green-50 rounded"
-                          title="Salvar"
                         >
                           {editSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                         </button>
                         <button
                           onClick={cancelEdit}
                           className="p-1.5 text-gray-400 hover:bg-gray-100 rounded"
-                          title="Cancelar"
                         >
                           <X size={14} />
                         </button>
@@ -355,14 +447,12 @@ export default function MediaPage() {
                         <button
                           onClick={() => startEdit(item)}
                           className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                          title="Editar"
                         >
                           <Edit2 size={14} />
                         </button>
                         <button
                           onClick={() => setDeleteTarget(item)}
                           className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
-                          title="Deletar"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -371,7 +461,6 @@ export default function MediaPage() {
                   </div>
                 </div>
 
-                {/* Description */}
                 {isEditing ? (
                   <div className="space-y-2 mb-3">
                     <input
@@ -379,14 +468,14 @@ export default function MediaPage() {
                       value={editDesc}
                       onChange={(e) => setEditDesc(e.target.value)}
                       placeholder="Descricao..."
-                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
                     />
                     <input
                       type="text"
                       value={editTags}
                       onChange={(e) => setEditTags(e.target.value)}
                       placeholder="Tags (separadas por virgula)"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
                     />
                   </div>
                 ) : (
@@ -394,40 +483,39 @@ export default function MediaPage() {
                     {item.description && (
                       <p className="text-sm text-gray-600 mb-3 line-clamp-2">{item.description}</p>
                     )}
+                    {item.tags?.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {item.tags.map((tag, index) => (
+                          <span
+                            key={`${item.id}-${tag}-${index}`}
+                            className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
 
-                {/* Tags */}
-                {!isEditing && item.tags && item.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {item.tags.map((tag, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* URL */}
                 <a
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs text-blue-500 hover:underline truncate block"
-                  title={item.url}
+                  className="inline-flex items-center gap-1 text-xs text-blue-500 hover:underline truncate"
                 >
+                  <ExternalLink size={12} />
                   {item.url}
                 </a>
 
-                {/* Date */}
                 <p className="text-xs text-gray-400 mt-2">
                   {item.created_at
                     ? new Date(item.created_at).toLocaleDateString('pt-BR', {
-                        day: '2-digit', month: '2-digit', year: '2-digit',
-                        hour: '2-digit', minute: '2-digit',
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
                       })
                     : '-'}
                 </p>
@@ -437,10 +525,9 @@ export default function MediaPage() {
         </div>
       )}
 
-      {/* Add Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl">
             <div className="flex items-center justify-between p-4 border-b">
               <h2 className="text-lg font-bold">Adicionar Media</h2>
               <button onClick={() => setShowAddModal(false)} className="p-1 hover:bg-gray-100 rounded">
@@ -449,73 +536,73 @@ export default function MediaPage() {
             </div>
 
             <div className="p-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
+              <div className="rounded-xl border border-dashed border-blue-200 bg-blue-50/50 p-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Upload de arquivo
+                </label>
+                <input
+                  type="file"
+                  onChange={(e) => handleFileSelection(e.target.files?.[0] || null)}
+                  className="block w-full text-sm text-gray-600"
+                />
+                {uploadFile && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    {uploadFile.name} · {formatSize(uploadFile.size)}
+                  </p>
+                )}
+              </div>
+
+              <div className="text-xs uppercase tracking-wide text-gray-400">Ou adicionar por URL</div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   value={addForm.media_type}
-                  onChange={e => setAddForm(f => ({ ...f, media_type: e.target.value }))}
+                  onChange={(e) =>
+                    setAddForm((current) => ({ ...current, media_type: e.target.value }))
+                  }
                 >
-                  {MEDIA_TYPES.map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
+                  {MEDIA_TYPES.map((type) => (
+                    <option key={type.value} value={type.value}>{type.label}</option>
                   ))}
                 </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">URL</label>
-                <input
-                  type="url"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="https://example.com/arquivo.jpg"
-                  value={addForm.url}
-                  onChange={e => setAddForm(f => ({ ...f, url: e.target.value }))}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nome do arquivo</label>
                 <input
                   type="text"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="foto-produto.jpg"
+                  placeholder="Nome do arquivo"
                   value={addForm.filename}
-                  onChange={e => setAddForm(f => ({ ...f, filename: e.target.value }))}
+                  onChange={(e) =>
+                    setAddForm((current) => ({ ...current, filename: e.target.value }))
+                  }
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Descricao</label>
-                <textarea
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none"
-                  rows={3}
-                  placeholder="Descricao do arquivo..."
-                  value={addForm.description}
-                  onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))}
-                />
-              </div>
+              <input
+                type="url"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="https://example.com/arquivo.jpg"
+                value={addForm.url}
+                onChange={(e) => setAddForm((current) => ({ ...current, url: e.target.value }))}
+                disabled={Boolean(uploadFile)}
+              />
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tags (separadas por virgula)</label>
-                <input
-                  type="text"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="produto, marketing, banner"
-                  value={addForm.tags}
-                  onChange={e => setAddForm(f => ({ ...f, tags: e.target.value }))}
-                />
-              </div>
+              <textarea
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none"
+                rows={3}
+                placeholder="Descricao do arquivo..."
+                value={addForm.description}
+                onChange={(e) =>
+                  setAddForm((current) => ({ ...current, description: e.target.value }))
+                }
+              />
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tamanho (bytes)</label>
-                <input
-                  type="number"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="0"
-                  value={addForm.size_bytes || ''}
-                  onChange={e => setAddForm(f => ({ ...f, size_bytes: parseInt(e.target.value) || 0 }))}
-                />
-              </div>
+              <input
+                type="text"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="Tags (separadas por virgula)"
+                value={addForm.tags}
+                onChange={(e) => setAddForm((current) => ({ ...current, tags: e.target.value }))}
+              />
             </div>
 
             <div className="flex justify-end gap-2 p-4 border-t">
@@ -530,7 +617,7 @@ export default function MediaPage() {
                 disabled={saving}
                 className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
               >
-                {saving && <Loader2 size={14} className="animate-spin" />}
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
                 Adicionar
               </button>
             </div>
@@ -538,16 +625,12 @@ export default function MediaPage() {
         </div>
       )}
 
-      {/* Delete Confirmation */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Confirmar exclusao</h3>
-            <p className="text-sm text-gray-600 mb-1">
+            <p className="text-sm text-gray-600 mb-6">
               Tem certeza que deseja excluir <strong>{deleteTarget.filename}</strong>?
-            </p>
-            <p className="text-xs text-gray-400 mb-6">
-              Esta acao nao pode ser desfeita.
             </p>
             <div className="flex gap-3 justify-end">
               <button
@@ -562,6 +645,25 @@ export default function MediaPage() {
               >
                 Excluir
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">{previewTarget.filename}</h3>
+                <p className="text-sm text-gray-500">{previewTarget.description || 'Sem descricao'}</p>
+              </div>
+              <button onClick={() => setPreviewTarget(null)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4">
+              {renderPreview(previewTarget, 'max-h-[70vh] w-full rounded-xl border border-gray-200')}
             </div>
           </div>
         </div>
