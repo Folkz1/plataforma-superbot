@@ -149,6 +149,11 @@ async def test_pipeline_handoff_requires_auth(client):
 # ==================== Onboarding ====================
 
 @pytest.mark.anyio
+async def test_admin_overview_requires_auth(client):
+    response = await client.get("/api/admin/overview")
+    assert response.status_code in (401, 403)
+
+@pytest.mark.anyio
 async def test_onboarding_provision_requires_auth(client):
     response = await client.post(
         "/api/onboarding/provision",

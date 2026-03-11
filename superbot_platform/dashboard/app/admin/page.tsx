@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { AdminCockpit, type AdminOverviewCompany, type AdminOverviewResponse } from '@/components/admin/AdminCockpit';
 import {
   Plus, Edit, Trash2, Users, BarChart3, X, Bot,
   Link2, CheckCircle, AlertCircle, Loader2, LogOut,
@@ -63,6 +64,12 @@ export default function AdminDashboard() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [overviewLoading, setOverviewLoading] = useState(true);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [adminOverview, setAdminOverview] = useState<AdminOverviewResponse | null>(null);
+  const [overviewPeriodDays, setOverviewPeriodDays] = useState(1);
+  const [companySearch, setCompanySearch] = useState('');
+  const [healthFilter, setHealthFilter] = useState<'all' | 'healthy' | 'attention' | 'critical' | 'inactive'>('all');
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -113,6 +120,11 @@ export default function AdminDashboard() {
     loadAllUsers();
   }, [router]);
 
+  useEffect(() => {
+    if (!user) return;
+    loadAdminOverview();
+  }, [overviewPeriodDays, user]);
+
   const loadClients = async () => {
     try {
       const response = await api.get('/api/clients');
@@ -136,6 +148,19 @@ export default function AdminDashboard() {
       }
       setClientUsers(grouped);
     } catch {}
+  };
+
+  const loadAdminOverview = async () => {
+    try {
+      setOverviewLoading(true);
+      const response = await api.get('/api/admin/overview', { params: { days: overviewPeriodDays } });
+      setAdminOverview(response.data);
+      setOverviewError(null);
+    } catch (error: any) {
+      setOverviewError(error.response?.data?.detail || 'Erro ao carregar cockpit global');
+    } finally {
+      setOverviewLoading(false);
+    }
   };
 
   const openUserModal = (clientId: string) => {
@@ -202,6 +227,12 @@ export default function AdminDashboard() {
     router.push('/dash');
   };
 
+  const handleOpenOverviewDashboard = (company: AdminOverviewCompany) => {
+    localStorage.setItem('active_tenant_id', company.client_id);
+    localStorage.setItem('active_tenant_name', company.name);
+    router.push('/dash');
+  };
+
   const slugify = (text: string) =>
     text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -255,6 +286,7 @@ export default function AdminDashboard() {
       setWizardStep(5); // success step
       await loadClients();
       await loadAllUsers();
+      await loadAdminOverview();
     } catch (err: any) {
       setWizardError(err.response?.data?.detail || 'Erro ao provisionar cliente');
     } finally {
@@ -344,6 +376,7 @@ export default function AdminDashboard() {
         setMessage({ type: 'success', text: 'Cliente criado!' });
       }
       await loadClients();
+      await loadAdminOverview();
       setTimeout(() => setShowModal(false), 800);
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.detail || 'Erro ao salvar' });
@@ -357,6 +390,7 @@ export default function AdminDashboard() {
       await api.delete(`/api/clients/${clientId}`);
       setDeleteId(null);
       await loadClients();
+      await loadAdminOverview();
     } catch (error: any) {
       alert(error.response?.data?.detail || 'Erro ao excluir');
     }
@@ -389,8 +423,6 @@ export default function AdminDashboard() {
     );
   }
 
-  const activeClients = clients.filter(c => c.status === 'active').length;
-
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -403,7 +435,7 @@ export default function AdminDashboard() {
               </div>
               <div>
                 <h1 className="text-lg font-bold">SuperBot Admin</h1>
-                <p className="text-xs text-gray-400">Gerenciamento de Clientes</p>
+                <p className="text-xs text-gray-400">Cockpit global e gestao operacional</p>
               </div>
             </div>
             <div className="flex items-center gap-4">
@@ -418,47 +450,26 @@ export default function AdminDashboard() {
 
       {/* Main */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Clientes</p>
-                <p className="text-3xl font-bold text-gray-900 mt-1">{clients.length}</p>
-              </div>
-              <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center">
-                <Users className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Ativos</p>
-                <p className="text-3xl font-bold text-green-600 mt-1">{activeClients}</p>
-              </div>
-              <div className="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center">
-                <div className="w-4 h-4 bg-green-500 rounded-full"></div>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Inativos</p>
-                <p className="text-3xl font-bold text-gray-400 mt-1">{clients.length - activeClients}</p>
-              </div>
-              <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center">
-                <div className="w-4 h-4 bg-gray-400 rounded-full"></div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <AdminCockpit
+          overview={adminOverview}
+          loading={overviewLoading}
+          error={overviewError}
+          periodDays={overviewPeriodDays}
+          onPeriodDaysChange={setOverviewPeriodDays}
+          companySearch={companySearch}
+          onCompanySearchChange={setCompanySearch}
+          healthFilter={healthFilter}
+          onHealthFilterChange={setHealthFilter}
+          onOpenDashboard={handleOpenOverviewDashboard}
+        />
 
         {/* Clients Table */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="px-6 py-4 border-b flex justify-between items-center">
-            <h2 className="text-lg font-semibold text-gray-900">Clientes</h2>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Gestao de clientes</h2>
+              <p className="text-sm text-gray-500">Cadastro, credenciais, onboarding e acesso ao dashboard de cada empresa.</p>
+            </div>
             <button
               onClick={openCreateModal}
               className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium"

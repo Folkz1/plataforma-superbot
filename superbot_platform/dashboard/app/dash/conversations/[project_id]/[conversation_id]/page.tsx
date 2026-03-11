@@ -1,18 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
-  Activity,
   AlertTriangle,
   ArrowLeft,
-  BarChart3,
   Bot,
   Check,
   Clock,
   Copy,
   HandMetal,
-  Layers3,
   MessageCircle,
   MoreHorizontal,
   PauseCircle,
@@ -23,10 +20,8 @@ import {
   RotateCcw,
   Send,
   Share2,
-  TrendingUp,
   User,
   UserCircle,
-  Users,
   Wrench,
   X,
 } from 'lucide-react';
@@ -55,65 +50,6 @@ type MediaItem = {
   mime_type?: string;
   transcription?: string;
   analysis?: string;
-};
-
-type ViewerInfo = {
-  role?: string;
-  client_name?: string;
-};
-
-type OverviewMetrics = {
-  total_conversations: number;
-  period_conversations: number;
-  active_conversations: number;
-  resolution_rate: number;
-  total_messages: number;
-  period_messages: number;
-  avg_response_time: string;
-  period_days: number;
-};
-
-type StatusDistributionItem = {
-  name: string;
-  count: number;
-};
-
-type ChannelDistributionItem = {
-  name: string;
-  count: number;
-  percentage: number;
-};
-
-type HourlyDistributionItem = {
-  hour: number;
-  count: number;
-};
-
-type ContactActivityItem = {
-  project_id: string;
-  conversation_id: string;
-  contact_name: string;
-  channel_type: string;
-  status: string;
-  last_event_at: string;
-  last_text?: string | null;
-};
-
-type PipelineMetrics = {
-  by_member: Array<{ id: string; name: string; active_count: number; completed_count: number; total_count: number }>;
-  by_stage: Array<{ id: string; name: string; color?: string; position: number; active_count: number }>;
-  pool_count: number;
-  project_id: string;
-};
-
-type ProjectActivitySummary = {
-  overview: OverviewMetrics;
-  statuses: StatusDistributionItem[];
-  channels: ChannelDistributionItem[];
-  hourly: HourlyDistributionItem[];
-  recentContacts: ContactActivityItem[];
-  metrics: PipelineMetrics | null;
-  loadedAt: string;
 };
 
 const STATUS_META: Record<string, { label: string; badge: string }> = {
@@ -149,10 +85,6 @@ function getChannelLabel(channel: string): string {
 function getStartOfToday(): Date {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-}
-
-function formatHourLabel(hour: number): string {
-  return `${hour.toString().padStart(2, '0')}:00`;
 }
 
 function formatRelativeTime(value?: string | null): string {
@@ -244,11 +176,6 @@ export default function ConversationViewerPage() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [pauseMenuOpen, setPauseMenuOpen] = useState(false);
-  const [viewerRole, setViewerRole] = useState<string | null>(null);
-  const [activeTenantName, setActiveTenantName] = useState('');
-  const [activitySummary, setActivitySummary] = useState<ProjectActivitySummary | null>(null);
-  const [activityLoading, setActivityLoading] = useState(false);
-  const [activityError, setActivityError] = useState<string | null>(null);
 
   const {
     conversation,
@@ -270,85 +197,12 @@ export default function ConversationViewerPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [visibleMessages.length]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    try {
-      const rawUser = localStorage.getItem('user');
-      if (!rawUser) return;
-      const user = JSON.parse(rawUser) as ViewerInfo;
-      setViewerRole(user.role || null);
-      setActiveTenantName(
-        user.role === 'admin'
-          ? (localStorage.getItem('active_tenant_name') || '')
-          : (user.client_name || ''),
-      );
-    } catch {
-      setViewerRole(null);
-      setActiveTenantName('');
-    }
-  }, []);
-
-  const isAdmin = viewerRole === 'admin';
   const isHandoff = conversation?.status === 'handoff';
   const takeoverUntil = conversation?.metadata?.human_takeover_until;
   const takeoverAgent = conversation?.metadata?.human_agent_name;
   const isBotPaused = conversation?.metadata?.bot_paused === true;
   const pausedBy = conversation?.metadata?.bot_paused_by;
   const pausedUntil = conversation?.metadata?.bot_paused_until;
-
-  const loadProjectActivity = useCallback(async (silent = false) => {
-    if (!projectId || !isAdmin) return;
-
-    if (!silent) setActivityLoading(true);
-
-    try {
-      const todayIso = getStartOfToday().toISOString();
-      const [overviewResp, statusResp, channelsResp, hourlyResp, contactsResp, metricsResp] = await Promise.all([
-        api.get(`/api/analytics/overview/${projectId}`, { params: { days: 1 } }),
-        api.get(`/api/analytics/status/${projectId}`, { params: { days: 1 } }),
-        api.get(`/api/analytics/channels/${projectId}`, { params: { days: 1 } }),
-        api.get(`/api/analytics/hourly/${projectId}`, { params: { days: 1 } }),
-        api.get('/api/contacts/', {
-          params: {
-            project_id: projectId,
-            limit: 8,
-            last_event_from: todayIso,
-          },
-        }),
-        api.get(`/api/pipeline/metrics/${projectId}`),
-      ]);
-
-      setActivitySummary({
-        overview: overviewResp.data as OverviewMetrics,
-        statuses: statusResp.data?.statuses || [],
-        channels: channelsResp.data?.channels || [],
-        hourly: hourlyResp.data?.hourly || [],
-        recentContacts: contactsResp.data || [],
-        metrics: (metricsResp.data || null) as PipelineMetrics | null,
-        loadedAt: new Date().toISOString(),
-      });
-      setActivityError(null);
-    } catch (error: any) {
-      if (!silent || !activitySummary) {
-        setActivityError(error?.response?.data?.detail || 'Erro ao carregar resumo do dia');
-      }
-    } finally {
-      if (!silent) setActivityLoading(false);
-    }
-  }, [activitySummary, isAdmin, projectId]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-
-    loadProjectActivity();
-    const interval = setInterval(() => {
-      loadProjectActivity(true);
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [isAdmin, loadProjectActivity]);
 
   const conversationInsights = useMemo(() => {
     const startOfDay = getStartOfToday();
@@ -375,25 +229,6 @@ export default function ConversationViewerPage() {
         : 'Sem registro',
     };
   }, [conversation?.last_event_at, visibleMessages]);
-
-  const statusSummary = useMemo(() => {
-    return (activitySummary?.statuses || []).reduce<Record<string, number>>((accumulator, item) => {
-      accumulator[item.name] = item.count;
-      return accumulator;
-    }, {});
-  }, [activitySummary?.statuses]);
-
-  const peakHour = useMemo(() => {
-    return (activitySummary?.hourly || []).reduce<HourlyDistributionItem | null>((top, item) => {
-      if (!top || item.count > top.count) return item;
-      return top;
-    }, null);
-  }, [activitySummary?.hourly]);
-
-  const currentHourActivity = useMemo(() => {
-    const currentHour = new Date().getHours();
-    return activitySummary?.hourly?.find((item) => item.hour === currentHour)?.count || 0;
-  }, [activitySummary?.hourly]);
 
   const handleSend = async () => {
     if (!replyText.trim() || sending) return;
@@ -494,7 +329,6 @@ export default function ConversationViewerPage() {
 
   const handleManualRefresh = () => {
     refresh();
-    if (isAdmin) loadProjectActivity(true);
   };
 
   const copyLink = () => {
@@ -798,184 +632,7 @@ export default function ConversationViewerPage() {
       </header>
 
       <main className="mx-auto flex-1 w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        {isAdmin && (
-          <section className="mb-6 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-6 py-6 text-white">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.28em] text-slate-300">Painel do admin</p>
-                  <h2 className="mt-2 text-2xl font-semibold">
-                    Resumo do dia{activeTenantName ? ` em ${activeTenantName}` : ''}
-                  </h2>
-                  <p className="mt-2 max-w-3xl text-sm text-slate-300">
-                    Visao executiva da operacao sem sair da conversa: volume, fila, canais e ritmo do dia.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-slate-300">
-                  <Clock className="h-4 w-4" />
-                  <span>
-                    {activitySummary
-                      ? `Atualizado as ${new Date(activitySummary.loadedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-                      : activityLoading
-                        ? 'Atualizando visao do dia'
-                        : 'Aguardando dados'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6">
-              {activityError && !activitySummary && (
-                <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                  {activityError}
-                </div>
-              )}
-
-              {activityLoading && !activitySummary ? (
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  {Array.from({ length: 4 }).map((_, index) => (
-                    <div key={index} className="h-28 animate-pulse rounded-2xl bg-slate-100" />
-                  ))}
-                </div>
-              ) : activitySummary ? (
-                <>
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-cyan-100 bg-cyan-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-cyan-900">Conversas hoje</p>
-                        <Activity className="h-5 w-5 text-cyan-500" />
-                      </div>
-                      <p className="mt-4 text-3xl font-semibold text-slate-900">
-                        {activitySummary.overview.period_conversations.toLocaleString('pt-BR')}
-                      </p>
-                      <p className="mt-1 text-xs text-cyan-700">Contatos com movimento no dia</p>
-                    </div>
-
-                    <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-blue-900">Mensagens hoje</p>
-                        <BarChart3 className="h-5 w-5 text-blue-500" />
-                      </div>
-                      <p className="mt-4 text-3xl font-semibold text-slate-900">
-                        {activitySummary.overview.period_messages.toLocaleString('pt-BR')}
-                      </p>
-                      <p className="mt-1 text-xs text-blue-700">
-                        Tempo medio de resposta: {activitySummary.overview.avg_response_time}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-emerald-900">Em andamento</p>
-                        <Users className="h-5 w-5 text-emerald-500" />
-                      </div>
-                      <p className="mt-4 text-3xl font-semibold text-slate-900">
-                        {activitySummary.overview.active_conversations.toLocaleString('pt-BR')}
-                      </p>
-                      <p className="mt-1 text-xs text-emerald-700">
-                        {activitySummary.metrics?.pool_count ?? 0} no pool sem dono
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-violet-900">Resolucao do dia</p>
-                        <TrendingUp className="h-5 w-5 text-violet-500" />
-                      </div>
-                      <p className="mt-4 text-3xl font-semibold text-slate-900">
-                        {activitySummary.overview.resolution_rate.toFixed(1)}%
-                      </p>
-                      <p className="mt-1 text-xs text-violet-700">Fechamentos em relacao ao movimento de hoje</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 grid gap-4 xl:grid-cols-[1.1fr_1fr_1fr]">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">Status do dia</p>
-                          <p className="text-xs text-slate-500">Onde a operacao esta concentrada</p>
-                        </div>
-                        <Layers3 className="h-5 w-5 text-slate-400" />
-                      </div>
-                      <div className="mt-4 space-y-3">
-                        {activitySummary.statuses.map((item) => {
-                          const total = activitySummary.overview.period_conversations || 1;
-                          const percentage = Math.round((item.count / total) * 100);
-                          return (
-                            <div key={item.name}>
-                              <div className="mb-1 flex items-center justify-between text-sm">
-                                <span className="font-medium text-slate-700">{getStatusLabel(item.name)}</span>
-                                <span className="text-slate-500">{item.count}</span>
-                              </div>
-                              <div className="h-2 rounded-full bg-white">
-                                <div className="h-2 rounded-full bg-slate-900" style={{ width: `${Math.max(8, percentage)}%` }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">Canais do dia</p>
-                          <p className="text-xs text-slate-500">Distribuicao do atendimento por origem</p>
-                        </div>
-                        <MessageCircle className="h-5 w-5 text-slate-400" />
-                      </div>
-                      <div className="mt-4 space-y-3">
-                        {activitySummary.channels.map((channel) => (
-                          <div key={channel.name} className="flex items-center justify-between rounded-2xl bg-white px-3 py-2">
-                            <div className="flex items-center gap-2">
-                              {getChannelIcon(channel.name)}
-                              <div>
-                                <p className="text-sm font-medium text-slate-700">{getChannelLabel(channel.name)}</p>
-                                <p className="text-[11px] text-slate-500">{channel.count} conversas</p>
-                              </div>
-                            </div>
-                            <span className="text-sm font-semibold text-slate-900">{channel.percentage.toFixed(1)}%</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">Ritmo operacional</p>
-                          <p className="text-xs text-slate-500">Pressao atual da operacao</p>
-                        </div>
-                        <Clock className="h-5 w-5 text-slate-400" />
-                      </div>
-                      <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                        <div className="rounded-2xl bg-white px-4 py-3">
-                          <p className="text-xs uppercase tracking-wide text-slate-400">Fila sem dono</p>
-                          <p className="mt-2 text-2xl font-semibold text-slate-900">{activitySummary.metrics?.pool_count ?? 0}</p>
-                        </div>
-                        <div className="rounded-2xl bg-white px-4 py-3">
-                          <p className="text-xs uppercase tracking-wide text-slate-400">Pico do dia</p>
-                          <p className="mt-2 text-2xl font-semibold text-slate-900">
-                            {peakHour ? formatHourLabel(peakHour.hour) : '--:--'}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">{peakHour?.count || 0} eventos na faixa</p>
-                        </div>
-                        <div className="rounded-2xl bg-white px-4 py-3">
-                          <p className="text-xs uppercase tracking-wide text-slate-400">Agora</p>
-                          <p className="mt-2 text-2xl font-semibold text-slate-900">{currentHourActivity}</p>
-                          <p className="mt-1 text-xs text-slate-500">mensagens nesta hora</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-            </div>
-          </section>
-        )}
-
-        <div className={`grid gap-6 ${isAdmin ? 'xl:grid-cols-[minmax(0,1fr)_340px]' : ''}`}>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
           <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 px-5 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1230,131 +887,67 @@ export default function ConversationViewerPage() {
             )}
           </section>
 
-          {isAdmin && (
-            <aside className="self-start space-y-4 xl:sticky xl:top-24">
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Leitura desta conversa</p>
-                    <p className="text-xs text-slate-500">Sinais rapidos para decidir o proximo passo</p>
-                  </div>
-                  <UserCircle className="h-5 w-5 text-slate-400" />
+          <aside className="self-start xl:sticky xl:top-24">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Leitura desta conversa</p>
+                  <p className="text-xs text-slate-500">Resumo rapido para decidir o proximo passo sem perder contexto.</p>
                 </div>
+                <UserCircle className="h-5 w-5 text-slate-400" />
+              </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-slate-50 p-3">
-                    <p className="text-xs uppercase tracking-wide text-slate-400">Hoje</p>
-                    <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.todayMessages}</p>
-                    <p className="text-xs text-slate-500">mensagens</p>
-                  </div>
-                  <div className="rounded-2xl bg-slate-50 p-3">
-                    <p className="text-xs uppercase tracking-wide text-slate-400">Midia hoje</p>
-                    <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.mediaToday}</p>
-                    <p className="text-xs text-slate-500">anexos</p>
-                  </div>
-                  <div className="rounded-2xl bg-sky-50 p-3">
-                    <p className="text-xs uppercase tracking-wide text-sky-500">Recebidas</p>
-                    <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.incomingToday}</p>
-                    <p className="text-xs text-slate-500">entradas hoje</p>
-                  </div>
-                  <div className="rounded-2xl bg-emerald-50 p-3">
-                    <p className="text-xs uppercase tracking-wide text-emerald-500">Enviadas</p>
-                    <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.outgoingToday}</p>
-                    <p className="text-xs text-slate-500">saidas hoje</p>
-                  </div>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Total</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.totalMessages}</p>
+                  <p className="text-xs text-slate-500">mensagens visiveis</p>
                 </div>
-
-                <div className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-slate-500">Status atual</span>
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${getStatusBadge(conversation.status)}`}>
-                      {getStatusLabel(conversation.status)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-slate-500">Ultimo toque</span>
-                    <span className="font-medium text-slate-900">{conversationInsights.lastTouchRelative}</span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-slate-500">Horario</span>
-                    <span className="font-medium text-slate-900">{conversationInsights.lastTouchExact}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Canal</span>
-                    <span className="font-medium text-slate-900">{getChannelLabel(conversation.channel_type)}</span>
-                  </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Hoje</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.todayMessages}</p>
+                  <p className="text-xs text-slate-500">mensagens no dia</p>
+                </div>
+                <div className="rounded-2xl bg-sky-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-sky-500">Recebidas</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.incomingToday}</p>
+                  <p className="text-xs text-slate-500">entradas hoje</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-emerald-500">Enviadas</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.outgoingToday}</p>
+                  <p className="text-xs text-slate-500">saidas hoje</p>
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mt-3 rounded-2xl bg-violet-50 p-3">
+                <p className="text-xs uppercase tracking-wide text-violet-500">Midia hoje</p>
+                <p className="mt-2 text-2xl font-semibold text-slate-900">{conversationInsights.mediaToday}</p>
+                <p className="text-xs text-slate-500">mensagens com anexo</p>
+              </div>
+
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <span className="text-slate-500">Status atual</span>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${getStatusBadge(conversation.status)}`}>
+                    {getStatusLabel(conversation.status)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <span className="text-slate-500">Ultimo toque</span>
+                  <span className="font-medium text-slate-900">{conversationInsights.lastTouchRelative}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <span className="text-slate-500">Horario</span>
+                  <span className="font-medium text-slate-900">{conversationInsights.lastTouchExact}</span>
+                </div>
                 <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Fila viva de hoje</p>
-                    <p className="text-xs text-slate-500">Quem acabou de movimentar e precisa de contexto</p>
-                  </div>
-                  <Activity className="h-5 w-5 text-slate-400" />
-                </div>
-
-                <div className="mt-4 grid grid-cols-3 gap-3">
-                  <div className="rounded-2xl bg-slate-50 p-3 text-center">
-                    <p className="text-xs text-slate-400">Open</p>
-                    <p className="mt-1 text-xl font-semibold text-slate-900">{statusSummary.open || 0}</p>
-                  </div>
-                  <div className="rounded-2xl bg-amber-50 p-3 text-center">
-                    <p className="text-xs text-amber-500">Aguardando</p>
-                    <p className="mt-1 text-xl font-semibold text-slate-900">{statusSummary.waiting_customer || 0}</p>
-                  </div>
-                  <div className="rounded-2xl bg-orange-50 p-3 text-center">
-                    <p className="text-xs text-orange-500">Handoff</p>
-                    <p className="mt-1 text-xl font-semibold text-slate-900">{statusSummary.handoff || 0}</p>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {(activitySummary?.recentContacts || []).map((contact) => {
-                    const isCurrent = contact.conversation_id === conversationId && contact.channel_type === conversation.channel_type;
-                    return (
-                      <button
-                        key={`${contact.channel_type}-${contact.conversation_id}`}
-                        onClick={() => {
-                          if (isCurrent) return;
-                          router.push(`/dash/conversations/${contact.project_id}/${contact.conversation_id}?channel_type=${contact.channel_type}`);
-                        }}
-                        className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                          isCurrent
-                            ? 'border-slate-900 bg-slate-900 text-white'
-                            : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              {getChannelIcon(contact.channel_type)}
-                              <p className={`truncate text-sm font-medium ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
-                                {contact.contact_name}
-                              </p>
-                            </div>
-                            <p className={`mt-1 line-clamp-2 text-xs ${isCurrent ? 'text-slate-200' : 'text-slate-500'}`}>
-                              {contact.last_text || 'Sem ultima mensagem de texto'}
-                            </p>
-                          </div>
-                          <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-medium ${
-                            isCurrent ? 'bg-white/15 text-white' : getStatusBadge(contact.status)
-                          }`}>
-                            {getStatusLabel(contact.status)}
-                          </span>
-                        </div>
-                        <div className={`mt-3 flex items-center justify-between text-[11px] ${isCurrent ? 'text-slate-300' : 'text-slate-500'}`}>
-                          <span>{getChannelLabel(contact.channel_type)}</span>
-                          <span>{formatRelativeTime(contact.last_event_at)}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
+                  <span className="text-slate-500">Canal</span>
+                  <span className="font-medium text-slate-900">{getChannelLabel(conversation.channel_type)}</span>
                 </div>
               </div>
-            </aside>
-          )}
+            </div>
+          </aside>
         </div>
       </main>
 
