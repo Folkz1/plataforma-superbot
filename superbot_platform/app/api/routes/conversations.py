@@ -2,9 +2,11 @@
 Updated Conversations API with real PostgreSQL queries (Async version)
 """
 import logging
+import os
 import httpx
+import jwt
 import uuid as uuid_mod
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import desc, func, and_, select, text as sa_text, update as sa_update
 from pydantic import BaseModel
@@ -20,6 +22,12 @@ from app.core.tenancy import resolve_project_id_for_user, resolve_project_id_fro
 logger = logging.getLogger("superbot.conversations")
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
+MEDIA_TOKEN_SECRET = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+MEDIA_TOKEN_ALGORITHM = "HS256"
+MEDIA_TOKEN_TTL_MINUTES = 15
+META_API_VERSION = "v21.0"
+WHATSAPP_MEDIA_TYPES = {"audio", "image", "video", "document", "sticker"}
 
 
 # ==================== Helpers ====================
@@ -193,6 +201,131 @@ def _is_meta_echo_event(event: ConversationEvent) -> bool:
         return str(raw_echo).lower() == "true" or str(meta_echo).lower() == "true"
     except (IndexError, KeyError, TypeError, AttributeError):
         return False
+
+
+def _extract_whatsapp_media_items(raw_payload: dict | None) -> list[dict[str, str]]:
+    """Extract WhatsApp media metadata from persisted raw payload."""
+    if not raw_payload:
+        return []
+
+    wa_msg = None
+
+    raw_inner = raw_payload.get("raw")
+    if isinstance(raw_inner, dict) and raw_inner.get("type"):
+        wa_msg = raw_inner
+    else:
+        try:
+            entries = raw_payload.get("entry") or []
+            changes = entries[0].get("changes", []) if entries else []
+            value = changes[0].get("value", {}) if changes else {}
+            messages = value.get("messages", [])
+            wa_msg = messages[0] if messages else None
+        except (IndexError, KeyError, TypeError, AttributeError):
+            wa_msg = None
+
+    if not isinstance(wa_msg, dict):
+        return []
+
+    media_type = str(wa_msg.get("type") or "").lower()
+    if media_type not in WHATSAPP_MEDIA_TYPES:
+        return []
+
+    media_payload = wa_msg.get(media_type)
+    if not isinstance(media_payload, dict):
+        return []
+
+    media_id = media_payload.get("id")
+    if not media_id:
+        return []
+
+    item = {
+        "type": media_type,
+        "media_id": str(media_id),
+    }
+
+    for key in ("mime_type", "sha256", "caption", "filename"):
+        value = media_payload.get(key)
+        if value:
+            item[key] = str(value)
+
+    return [item]
+
+
+def _encode_media_token(
+    project_id: str,
+    conversation_id: str,
+    event_id: str,
+    channel_type: str,
+    media_id: str,
+) -> str:
+    payload = {
+        "type": "conversation_media",
+        "project_id": project_id,
+        "conversation_id": conversation_id,
+        "event_id": event_id,
+        "channel_type": channel_type,
+        "media_id": media_id,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=MEDIA_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(payload, MEDIA_TOKEN_SECRET, algorithm=MEDIA_TOKEN_ALGORITHM)
+
+
+def _decode_media_token(token: str) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(token, MEDIA_TOKEN_SECRET, algorithms=[MEDIA_TOKEN_ALGORITHM])
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Link de mídia expirado") from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Link de mídia inválido") from exc
+
+    if payload.get("type") != "conversation_media":
+        raise HTTPException(status_code=401, detail="Link de mídia inválido")
+
+    return payload
+
+
+def _build_media_payload(
+    request: Request,
+    project_id: str,
+    conversation_id: str,
+    channel_type: str,
+    event_id: str,
+    stored_media: Any,
+    raw_payload: dict | None,
+) -> Any:
+    if stored_media:
+        return stored_media
+
+    if channel_type != "whatsapp":
+        return stored_media
+
+    extracted = _extract_whatsapp_media_items(raw_payload)
+    if not extracted:
+        return stored_media
+
+    base_url = str(request.base_url).rstrip("/")
+    media_items = []
+    for item in extracted:
+        signed = _encode_media_token(
+            project_id=project_id,
+            conversation_id=conversation_id,
+            event_id=event_id,
+            channel_type=channel_type,
+            media_id=item["media_id"],
+        )
+        proxy_url = f"{base_url}/api/conversations/media/proxy/{signed}"
+        media_item = {
+            "type": item["type"],
+            "url": proxy_url,
+            "download_url": proxy_url,
+        }
+        for key in ("mime_type", "caption", "filename"):
+            value = item.get(key)
+            if value:
+                media_item[key] = value
+        media_items.append(media_item)
+
+    return media_items
 
 
 # ==================== Schemas ====================
@@ -485,6 +618,7 @@ async def list_conversations(
 async def get_conversation(
     project_id: str,
     conversation_id: str,
+    request: Request,
     channel_type: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: DashboardUser = Depends(get_current_user)
@@ -619,7 +753,15 @@ async def get_conversation(
                 "direction": event.direction or "in",
                 "message_type": event.message_type or "text",
                 "text": text,
-                "media": event.media,
+                "media": _build_media_payload(
+                    request=request,
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    channel_type=state.channel_type,
+                    event_id=str(event.id),
+                    stored_media=event.media,
+                    raw_payload=event.raw_payload if isinstance(event.raw_payload, dict) else None,
+                ),
                 "raw_payload": event.raw_payload,
                 "created_at": event.event_created_at or event.created_at or datetime.now(timezone.utc)
             })
@@ -631,7 +773,15 @@ async def get_conversation(
                 "direction": event.direction or "in",
                 "message_type": event.message_type or "text",
                 "text": event.text or "[erro ao processar mensagem]",
-                "media": event.media,
+                "media": _build_media_payload(
+                    request=request,
+                    project_id=project_id,
+                    conversation_id=conversation_id,
+                    channel_type=state.channel_type,
+                    event_id=str(event.id),
+                    stored_media=event.media,
+                    raw_payload=event.raw_payload if isinstance(event.raw_payload, dict) else None,
+                ),
                 "raw_payload": event.raw_payload,
                 "created_at": event.event_created_at or event.created_at or datetime.now(timezone.utc)
             })
@@ -649,6 +799,107 @@ async def get_conversation(
         "metadata": state.metadata_json,
         "messages": messages
     }
+
+
+@router.get("/media/proxy/{token}")
+async def proxy_conversation_media(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Proxy signed WhatsApp media URLs so the dashboard can play them without auth headers."""
+    payload = _decode_media_token(token)
+    project_uuid = UUID(str(payload["project_id"]))
+    event_uuid = UUID(str(payload["event_id"]))
+    conversation_id = str(payload["conversation_id"])
+    channel_type = str(payload["channel_type"])
+    media_id = str(payload["media_id"])
+
+    event = (
+        await db.execute(
+            select(ConversationEvent).where(
+                and_(
+                    ConversationEvent.id == event_uuid,
+                    ConversationEvent.project_id == project_uuid,
+                    ConversationEvent.channel_type == channel_type,
+                    ConversationEvent.conversation_id == conversation_id,
+                )
+            )
+        )
+    ).scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Evento de mídia não encontrado")
+
+    state = (
+        await db.execute(
+            select(ConversationState).where(
+                and_(
+                    ConversationState.project_id == project_uuid,
+                    ConversationState.channel_type == channel_type,
+                    ConversationState.conversation_id == conversation_id,
+                )
+            )
+        )
+    ).scalar_one_or_none()
+    if not state:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    channel = (
+        await db.execute(
+            select(Channel).where(
+                and_(
+                    Channel.project_id == project_uuid,
+                    Channel.channel_type == channel_type,
+                    Channel.channel_identifier == state.channel_identifier,
+                )
+            )
+        )
+    ).scalar_one_or_none()
+    if not channel or not channel.access_token:
+        raise HTTPException(status_code=400, detail="Canal sem access_token configurado")
+
+    headers = {"Authorization": f"Bearer {channel.access_token}"}
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        meta_resp = await client.get(
+            f"https://graph.facebook.com/{META_API_VERSION}/{media_id}",
+            headers=headers,
+        )
+        if meta_resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Erro ao resolver mídia da Meta ({meta_resp.status_code})",
+            )
+
+        meta_data = meta_resp.json()
+        source_url = meta_data.get("url")
+        if not source_url:
+            raise HTTPException(status_code=502, detail="Meta não retornou URL da mídia")
+
+        media_resp = await client.get(source_url, headers=headers)
+        if media_resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Erro ao baixar mídia da Meta ({media_resp.status_code})",
+            )
+
+    content_type = (
+        media_resp.headers.get("Content-Type")
+        or meta_data.get("mime_type")
+        or "application/octet-stream"
+    )
+    response_headers = {
+        "Cache-Control": "private, max-age=300",
+        "Accept-Ranges": "bytes",
+    }
+    filename = meta_data.get("name")
+    if filename:
+        response_headers["Content-Disposition"] = f'inline; filename="{filename}"'
+
+    return Response(
+        content=media_resp.content,
+        media_type=content_type,
+        headers=response_headers,
+    )
 
 
 # ==================== Takeover Humano ====================
