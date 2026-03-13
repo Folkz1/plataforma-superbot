@@ -229,6 +229,7 @@ export default function MetaConfigWizardPage() {
   const [configError, setConfigError] = useState<string>('');
 
   const [notificationPhone, setNotificationPhone] = useState<string>('');
+  const [notificationEmail, setNotificationEmail] = useState<string>('');
   const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState<string>('');
   const [whatsappHasToken, setWhatsappHasToken] = useState<boolean>(false);
   const [whatsappAccessToken, setWhatsappAccessToken] = useState<string>('');
@@ -265,6 +266,7 @@ export default function MetaConfigWizardPage() {
 
       const secrets = res.data?.secrets || {};
       setNotificationPhone(String(secrets.notification_phone || ''));
+      setNotificationEmail(String(secrets.notification_email || ''));
 
       setFollowupEnabled(Boolean(secrets.followup_enabled));
       setFeedbackEnabled(secrets.feedback_enabled !== false);
@@ -302,6 +304,7 @@ export default function MetaConfigWizardPage() {
 
       const patchPayload: any = {
         notification_phone: notificationPhone,
+        notification_email: notificationEmail,
         followup_enabled: followupEnabled,
         feedback_enabled: feedbackEnabled,
       };
@@ -507,7 +510,23 @@ export default function MetaConfigWizardPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Usado para receber resumo/feedback de conversas encerradas.
+                  Usado para receber resumo/feedback de conversas encerradas via WhatsApp.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  E-mail para Notificações
+                </label>
+                <input
+                  type="email"
+                  value={notificationEmail}
+                  onChange={(e) => setNotificationEmail(e.target.value)}
+                  placeholder="admin@empresa.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Recebe relatório por e-mail ao final de cada conversa.
                 </p>
               </div>
 
